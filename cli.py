@@ -41,7 +41,12 @@ from src.templates.decomposition import DECOMPOSITION_PROMPT
 
 load_dotenv()
 
-console = Console()
+# Forçar UTF-8 no Windows para suportar caracteres Unicode no Rich
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+
+console = Console(force_terminal=True)
 
 # ---------------------------------------------------------------------------
 # Configuração de modelos
@@ -149,7 +154,7 @@ def _get_httpx_client(provider: str) -> httpx.AsyncClient:
         # Gemini usa query param, mas adicionamos header por consistência
         pass
 
-    return httpx.AsyncClient(headers=headers, timeout=120.0)
+    return httpx.AsyncClient(headers=headers, timeout=300.0)
 
 
 def _create_agent(task_type: str, writing_mode: str = "article"):
@@ -210,7 +215,31 @@ async def _decompose_demand(demand: str) -> dict:
         if block["type"] == "text":
             content += block["text"]
 
-    return json.loads(content)
+    # Limpar markdown wrapping se presente
+    content = content.strip()
+    if content.startswith("```json"):
+        content = content[7:]
+    elif content.startswith("```"):
+        content = content[3:]
+    if content.endswith("```"):
+        content = content[:-3]
+    content = content.strip()
+
+    if not content:
+        console.print("[red]Erro: resposta vazia da API de decomposição.[/red]")
+        sys.exit(1)
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        # Tentar extrair JSON de dentro do texto
+        import re
+        match = re.search(r'\{[\s\S]*\}', content)
+        if match:
+            return json.loads(match.group())
+        console.print(f"[red]Erro ao parsear JSON da decomposição: {e}[/red]")
+        console.print(f"[dim]Conteúdo recebido (primeiros 500 chars):[/dim]\n{content[:500]}")
+        sys.exit(1)
 
 
 def _display_plan(plan: dict) -> None:
@@ -320,7 +349,7 @@ async def _execute_plan(plan: dict, verbose: bool = False, output_dir: Path = RE
                 model_info = TASK_MODEL_MAP.get(task_def["type"], ("?", "?", "white"))
                 console.print(
                     f"    [dim]{result.duration_seconds:.1f}s | "
-                    f"{result.tokens_input}→{result.tokens_output} tokens | "
+                    f"{result.tokens_input} > {result.tokens_output} tokens | "
                     f"US$ {result.cost_usd:.4f}[/dim]"
                 )
 
