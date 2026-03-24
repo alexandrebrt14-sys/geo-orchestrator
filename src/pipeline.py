@@ -1,8 +1,8 @@
 """Execution engine — runs tasks in dependency order with parallelism.
 
 Performs topological sorting, launches independent tasks concurrently,
-handles fallback on failure, quality gates, context optimization,
-and robust checkpointing for resumable execution.
+handles full fallback chain iteration, quality gates, context optimization,
+connection pooling, timeout tiers, early termination, and robust checkpointing.
 """
 
 from __future__ import annotations
@@ -19,16 +19,21 @@ from pathlib import Path
 
 from .config import (
     CONTEXT_SUMMARIZE_THRESHOLD,
+    DEFAULT_TIMEOUT,
     LLM_CONFIGS,
     LLMConfig,
     OUTPUT_DIR,
     Provider,
+    TIMEOUT_BY_TASK_TYPE,
 )
+from .connection_pool import ConnectionPool
 from .cost_tracker import CostTracker
+from .finops import BudgetExceededError, get_finops
 from .llm_client import LLMClient
 from .models import Plan, Task, TaskResult, TaskStatus
 from .rate_limiter import RateLimiter
 from .router import Router
+from .tracer import TraceManager
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +43,12 @@ class Pipeline:
 
     Features:
     - Wave-based parallel execution (groups of independent tasks)
+    - Connection pooling (one httpx.AsyncClient per provider, reused)
+    - Timeout tiers (per task type: research 45s, writing 60s, analysis 20s)
+    - Full fallback chain iteration (not just primary + one fallback)
+    - Early termination (stop chain when quality gate passes)
     - Checkpoint/resume for interrupted executions
-    - Quality gates with automatic retry on fallback LLM
+    - Quality gates with automatic retry on next LLM in chain
     - Context window optimization (summarize long dependency outputs)
     - Per-task result persistence
     """
@@ -52,6 +61,7 @@ class Pipeline:
         self._task_map: dict[str, Task] = {t.id: t for t in plan.tasks}
         self._execution_start_ms: int = 0
         self._wave_timings: list[dict] = []
+        self._pool = ConnectionPool.get_instance()
 
         # Directories for persistence
         self._results_dir = OUTPUT_DIR / ".results"
@@ -68,7 +78,31 @@ class Pipeline:
 
         Returns a dict mapping task_id -> TaskResult.
         """
+        tracer = TraceManager.get_instance()
+        pipeline_span = tracer.start_span(
+            "pipeline.execute",
+            demand=self.plan.demand,
+            task_count=len(self.plan.tasks),
+        )
+
         self._execution_start_ms = int(time.perf_counter_ns() / 1_000_000)
+
+        # FinOps: pre-execution budget check
+        finops = get_finops()
+        llm_names = []
+        for task in self.plan.tasks:
+            try:
+                cfg = self.router.route(task)
+                llm_names.append(cfg.name)
+            except RuntimeError:
+                pass
+        try:
+            finops.pre_execution_check(len(self.plan.tasks), llm_names or None)
+        except BudgetExceededError as exc:
+            logger.error("FinOps bloqueou a execucao: %s", exc)
+            pipeline_span.set_error(exc)
+            tracer.finish_span(pipeline_span)
+            raise
 
         # Check for existing checkpoint
         resumed_ids = self._load_checkpoint()
@@ -84,6 +118,14 @@ class Pipeline:
             if not pending_ids:
                 logger.info("Wave %d: all tasks already completed (resumed).", wave_idx + 1)
                 continue
+
+            # Start wave span
+            wave_span = tracer.start_span(
+                f"wave.{wave_idx + 1}",
+                task_count=len(pending_ids),
+                task_ids=pending_ids,
+                task_types=[self._task_map[tid].type for tid in pending_ids],
+            )
 
             wave_start = time.perf_counter_ns()
             logger.info(
@@ -142,8 +184,21 @@ class Pipeline:
                 wave_duration_ms / 1000,
             )
 
+            # Finish wave span
+            tracer.finish_span(wave_span, duration_ms=wave_duration_ms)
+
         # Clean up checkpoint on successful completion
         self._clear_checkpoint()
+
+        # Finish pipeline span
+        total_cost = sum(r.cost for r in self._results.values())
+        tracer.finish_span(
+            pipeline_span,
+            status="ok",
+            total_cost=total_cost,
+            tasks_completed=sum(1 for r in self._results.values() if r.success),
+            tasks_failed=sum(1 for r in self._results.values() if not r.success),
+        )
 
         return self._results
 
@@ -449,10 +504,36 @@ class Pipeline:
     # Task execution
     # ==================================================================
 
+    # ------------------------------------------------------------------
+    # Timeout resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_timeout(task_type: str) -> float:
+        """Return the appropriate timeout for a task type."""
+        return TIMEOUT_BY_TASK_TYPE.get(task_type, DEFAULT_TIMEOUT)
+
     async def _run_task(self, task_id: str, wave_index: int = -1) -> None:
-        """Execute a single task with fallback on failure and quality gate."""
+        """Execute a single task, iterating through the full fallback chain.
+
+        Uses early termination: if an LLM succeeds AND passes quality gate,
+        stop immediately — no further fallbacks needed. If quality fails,
+        try the next LLM in the chain. If all LLMs fail, keep the best
+        result available.
+        """
+        tracer = TraceManager.get_instance()
         task = self._task_map[task_id]
         task.status = TaskStatus.RUNNING
+
+        # Start task span
+        task_span = tracer.start_span(
+            f"task.{task_id}",
+            task_type=task.type,
+            task_id=task_id,
+            wave_index=wave_index,
+            dependencies=task.dependencies,
+            complexity=task.complexity.value if hasattr(task, 'complexity') else "medium",
+        )
 
         # Build prompt with optimized dependency context
         dep_outputs = {}
@@ -461,7 +542,6 @@ class Pipeline:
             if dep_result and dep_result.success:
                 dep_outputs[dep_id] = dep_result.output
 
-        # Use async context optimization for long outputs
         has_long = any(len(v) > CONTEXT_SUMMARIZE_THRESHOLD for v in dep_outputs.values())
         if has_long:
             context = await self._optimize_context(dep_outputs)
@@ -479,62 +559,72 @@ class Pipeline:
 
         start_time_ms = int(time.perf_counter_ns() / 1_000_000)
 
-        # Try primary LLM
-        primary_cfg = self.router.route(task)
-        result = await self._call_llm(task, primary_cfg, prompt)
-        result.wave_index = wave_index
-        result.start_time_ms = start_time_ms - self._execution_start_ms
+        # Iterate through the full fallback chain
+        tried: set[str] = set()
+        result: TaskResult | None = None
+        chain_log: list[str] = []
 
-        if result.success:
-            # Update router stats on success
-            self.router.update_stats(
-                task.type, primary_cfg.name, True, result.duration_ms, result.cost
-            )
+        while True:
+            next_cfg = self.router.get_next_in_chain(task, tried)
+            if next_cfg is None:
+                break
 
-            # Quality gate check
-            if not self._quality_check(task, result):
-                logger.info(
-                    "Quality gate failed for '%s', retrying with fallback.", task_id
+            tried.add(next_cfg.name)
+            chain_log.append(next_cfg.name)
+            attempt_result = await self._call_llm(task, next_cfg, prompt)
+            attempt_result.wave_index = wave_index
+            attempt_result.start_time_ms = start_time_ms - self._execution_start_ms
+
+            if attempt_result.success:
+                self.router.update_stats(
+                    task.type, next_cfg.name, True,
+                    attempt_result.duration_ms, attempt_result.cost,
                 )
-                fallback_cfg = self.router.get_fallback(task)
-                if fallback_cfg and fallback_cfg.name != primary_cfg.name:
-                    retry_result = await self._call_llm(task, fallback_cfg, prompt)
-                    retry_result.wave_index = wave_index
-                    retry_result.start_time_ms = start_time_ms - self._execution_start_ms
-                    retry_result.quality_retried = True
-                    if retry_result.success:
-                        self.router.update_stats(
-                            task.type, fallback_cfg.name, True,
-                            retry_result.duration_ms, retry_result.cost,
-                        )
-                        result = retry_result
-                    else:
-                        self.router.update_stats(
-                            task.type, fallback_cfg.name, False,
-                            retry_result.duration_ms, retry_result.cost,
-                        )
-                        # Keep original result if fallback also fails quality
-                        result.quality_retried = True
-        else:
-            # Primary failed — update stats and try fallback
-            self.router.update_stats(
-                task.type, primary_cfg.name, False, result.duration_ms, result.cost
-            )
-            fallback_cfg = self.router.get_fallback(task)
-            if fallback_cfg and fallback_cfg.name != primary_cfg.name:
-                result = await self._call_llm(task, fallback_cfg, prompt)
-                result.wave_index = wave_index
-                result.start_time_ms = start_time_ms - self._execution_start_ms
-                if result.success:
-                    self.router.update_stats(
-                        task.type, fallback_cfg.name, True,
-                        result.duration_ms, result.cost,
+
+                # Early termination: quality gate passes -> done
+                if self._quality_check(task, attempt_result):
+                    result = attempt_result
+                    logger.debug(
+                        "Task '%s': %s passed quality gate. Chain: %s",
+                        task_id, next_cfg.name, " > ".join(chain_log),
                     )
+                    break
+
+                # Quality failed — mark and try next in chain
+                logger.info(
+                    "Quality gate failed for '%s' via %s, trying next in chain.",
+                    task_id, next_cfg.name,
+                )
+                attempt_result.quality_retried = True
+                # Keep best successful result so far
+                if result is None or not result.success:
+                    result = attempt_result
                 else:
-                    self.router.update_stats(
-                        task.type, fallback_cfg.name, False,
-                        result.duration_ms, result.cost,
-                    )
+                    result = attempt_result
+            else:
+                # LLM call failed entirely
+                self.router.update_stats(
+                    task.type, next_cfg.name, False,
+                    attempt_result.duration_ms, attempt_result.cost,
+                )
+                logger.warning(
+                    "LLM '%s' failed for task '%s': %s. Trying next in chain.",
+                    next_cfg.name, task_id, attempt_result.error,
+                )
+                if result is None:
+                    result = attempt_result
+
+        # Safety fallback: if no result at all
+        if result is None:
+            result = TaskResult(
+                task_id=task_id,
+                llm_used="none",
+                output="",
+                success=False,
+                error="Nenhum LLM disponivel na cadeia de fallback.",
+            )
+            result.wave_index = wave_index
+            result.start_time_ms = start_time_ms - self._execution_start_ms
 
         # Record final state
         task.status = TaskStatus.COMPLETED if result.success else TaskStatus.FAILED
@@ -544,14 +634,78 @@ class Pipeline:
         task.duration_ms = result.duration_ms
         self._results[task_id] = result
 
+        # Finish task span with result metadata
+        tracer.finish_span(
+            task_span,
+            status="ok" if result.success else "error",
+            llm_used=result.llm_used,
+            cost=result.cost,
+            tokens_in=result.tokens_input,
+            tokens_out=result.tokens_output,
+            duration_ms=result.duration_ms,
+            quality_retried=result.quality_retried,
+            fallback_chain_tried=" > ".join(chain_log),
+        )
+
         # Persist result immediately
         self._save_task_result(task_id, result)
 
     async def _call_llm(
         self, task: Task, config: LLMConfig, prompt: str
     ) -> TaskResult:
-        """Call a specific LLM and return a TaskResult."""
-        client = LLMClient(config)
+        """Call a specific LLM and return a TaskResult.
+
+        Uses task-type-specific timeouts via connection pool.
+        Includes FinOps budget check before the call and cost recording after.
+        If the provider is over budget, attempts to find a cheaper alternative
+        via the router. If no alternative is available, returns a failed result.
+        """
+        finops = get_finops()
+
+        # FinOps: check provider budget before calling
+        try:
+            finops.check_budget(config.name)
+        except BudgetExceededError as exc:
+            logger.warning(
+                "FinOps bloqueou chamada para '%s' (tarefa '%s'): %s. "
+                "Tentando alternativa mais barata...",
+                config.name, task.id, exc,
+            )
+            cheaper = finops.get_cheapest_available()
+            if cheaper and cheaper != config.name and cheaper in LLM_CONFIGS:
+                logger.info(
+                    "FinOps: redirecionando tarefa '%s' de '%s' para '%s'.",
+                    task.id, config.name, cheaper,
+                )
+                config = LLM_CONFIGS[cheaper]
+                try:
+                    finops.check_budget(config.name)
+                except BudgetExceededError:
+                    return TaskResult(
+                        task_id=task.id,
+                        llm_used=config.name,
+                        output="",
+                        cost=0.0,
+                        duration_ms=0,
+                        tokens_used=0,
+                        success=False,
+                        error=f"BudgetExceededError: todos os providers atingiram o limite diario.",
+                    )
+            else:
+                return TaskResult(
+                    task_id=task.id,
+                    llm_used=config.name,
+                    output="",
+                    cost=0.0,
+                    duration_ms=0,
+                    tokens_used=0,
+                    success=False,
+                    error=f"BudgetExceededError: {exc}",
+                )
+
+        # Use task-type-specific timeout
+        timeout = self._get_timeout(task.type)
+        client = LLMClient(config, timeout_override=timeout)
         t0 = time.perf_counter_ns()
 
         try:
@@ -568,6 +722,15 @@ class Pipeline:
             self.cost_tracker.record(
                 task_id=task.id,
                 llm=config.name,
+                tokens_in=response.tokens_input,
+                tokens_out=response.tokens_output,
+                cost=response.cost,
+            )
+
+            # FinOps: record cost after successful call
+            finops.record_cost(
+                task_id=task.id,
+                provider_or_llm=config.name,
                 tokens_in=response.tokens_input,
                 tokens_out=response.tokens_output,
                 cost=response.cost,

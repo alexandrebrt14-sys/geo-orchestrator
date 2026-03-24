@@ -139,6 +139,63 @@ TASK_TYPES: dict[str, TaskRouting] = {
 
 
 # ---------------------------------------------------------------------------
+# Model tiers: cost-performance routing by complexity
+# ---------------------------------------------------------------------------
+
+MODEL_TIERS: dict[str, list[str]] = {
+    # Tier 1 (cheap, fast): classification, summarization, simple analysis
+    "low": ["gemini", "claude"],       # Gemini Flash is cheapest; Claude Haiku would go here too
+    # Tier 2 (balanced): writing, research
+    "medium": ["gpt4o", "perplexity"],
+    # Tier 3 (premium): complex code, architecture, critical review
+    "high": ["claude", "gpt4o"],
+}
+
+
+# ---------------------------------------------------------------------------
+# Fallback chains per task type (ordered priority list)
+# ---------------------------------------------------------------------------
+
+FALLBACK_CHAINS: dict[str, list[str]] = {
+    "research":        ["perplexity", "gpt4o", "gemini", "claude"],
+    "writing":         ["gpt4o", "claude", "perplexity", "gemini"],
+    "copywriting":     ["gpt4o", "claude", "perplexity", "gemini"],
+    "code":            ["claude", "gpt4o", "gemini", "perplexity"],
+    "review":          ["claude", "gpt4o", "gemini", "perplexity"],
+    "analysis":        ["gemini", "claude", "gpt4o", "perplexity"],
+    "seo":             ["gpt4o", "perplexity", "claude", "gemini"],
+    "data_processing": ["gemini", "gpt4o", "claude", "perplexity"],
+    "fact_check":      ["perplexity", "gemini", "claude", "gpt4o"],
+    "classification":  ["gemini", "claude", "gpt4o", "perplexity"],
+    "translation":     ["gpt4o", "gemini", "claude", "perplexity"],
+    "summarization":   ["gemini", "gpt4o", "claude", "perplexity"],
+}
+
+
+# ---------------------------------------------------------------------------
+# Timeout tiers by task type (seconds)
+# ---------------------------------------------------------------------------
+
+TIMEOUT_BY_TASK_TYPE: dict[str, float] = {
+    "research":        45.0,   # Perplexity needs time to search the web
+    "writing":         60.0,   # Long-form content generation
+    "copywriting":     60.0,   # Long-form content generation
+    "code":            60.0,   # Complex code generation
+    "review":          45.0,   # Detailed review takes time
+    "seo":             45.0,   # SEO analysis
+    "analysis":        20.0,   # Fast analytical tasks
+    "classification":  20.0,   # Quick classification
+    "summarization":   20.0,   # Fast summarization
+    "data_processing": 20.0,   # Bulk but simple
+    "fact_check":      30.0,   # Moderate — needs web search
+    "translation":     30.0,   # Moderate
+}
+
+# Default timeout for unknown task types
+DEFAULT_TIMEOUT: float = 45.0
+
+
+# ---------------------------------------------------------------------------
 # Budget and output settings
 # ---------------------------------------------------------------------------
 

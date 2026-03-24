@@ -14,21 +14,27 @@ import time
 import httpx
 
 from .config import LLMConfig, Provider
+from .finops import BudgetExceededError, get_finops
 from .models import LLMResponse
 from .rate_limiter import RateLimiter
+from .tracer import TraceManager
 
 logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """Async client that can query any of the 4 supported LLM providers."""
+    """Async client that can query any of the 4 supported LLM providers.
+
+    Supports per-task timeout overrides and connection pooling.
+    """
 
     TIMEOUT = 60.0
     MAX_RETRIES = 2
     BASE_RETRY_DELAY = 2.0  # seconds — exponential: 2s, 4s, 8s
 
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, timeout_override: float | None = None) -> None:
         self.config = config
+        self._timeout = timeout_override or self.TIMEOUT
         self._rate_limiter = RateLimiter.get_instance()
 
     async def query(
@@ -50,21 +56,59 @@ class LLMClient:
         if max_tokens <= 0:
             raise ValueError(f"max_tokens must be positive, got {max_tokens}")
 
+        tracer = TraceManager.get_instance()
         last_error: Exception | None = None
+        provider_name = self.config.provider.value
 
         for attempt in range(1 + self.MAX_RETRIES):
             try:
-                # Acquire rate limiter slot before each attempt
+                # Rate limiter span
+                rl_span = tracer.start_span(
+                    f"rate_limit.wait.{provider_name}",
+                    provider=provider_name,
+                )
                 await self._rate_limiter.acquire(self.config.provider)
-                return await self._call(prompt, system, max_tokens)
+                tracer.finish_span(rl_span, status="ok")
+
+                # LLM call span
+                llm_span = tracer.start_span(
+                    f"llm.query.{provider_name}",
+                    provider=provider_name,
+                    model=self.config.model,
+                    attempt=attempt + 1,
+                )
+                response = await self._call(prompt, system, max_tokens)
+                tracer.finish_span(
+                    llm_span,
+                    status="ok",
+                    tokens_in=response.tokens_input,
+                    tokens_out=response.tokens_output,
+                    cost=response.cost,
+                )
+                return response
 
             except httpx.HTTPStatusError as exc:
                 last_error = exc
                 status = exc.response.status_code
                 retryable = status in (429, 500, 502, 503)
 
+                # Finish the LLM span with error
+                if 'llm_span' in dir():
+                    tracer.finish_span(llm_span, status="error", http_status=status)
+
                 if retryable and attempt < self.MAX_RETRIES:
                     wait_time = self._compute_backoff(attempt, exc)
+
+                    # Retry span
+                    retry_span = tracer.start_span(
+                        f"llm.retry.{provider_name}",
+                        provider=provider_name,
+                        attempt=attempt + 1,
+                        http_status=status,
+                        wait_seconds=round(wait_time, 2),
+                        is_rate_limit=status == 429,
+                    )
+
                     logger.warning(
                         "Retry %d/%d for %s (HTTP %d): waiting %.1fs",
                         attempt + 1,
@@ -74,13 +118,29 @@ class LLMClient:
                         wait_time,
                     )
                     await asyncio.sleep(wait_time)
+                    tracer.finish_span(retry_span, status="ok")
                     continue
                 raise
 
             except httpx.TimeoutException as exc:
                 last_error = exc
+
+                # Finish the LLM span with error
+                if 'llm_span' in dir():
+                    tracer.finish_span(llm_span, status="error", error="timeout")
+
                 if attempt < self.MAX_RETRIES:
                     wait_time = self._compute_backoff(attempt)
+
+                    # Retry span
+                    retry_span = tracer.start_span(
+                        f"llm.retry.{provider_name}",
+                        provider=provider_name,
+                        attempt=attempt + 1,
+                        reason="timeout",
+                        wait_seconds=round(wait_time, 2),
+                    )
+
                     logger.warning(
                         "Retry %d/%d for %s (timeout): waiting %.1fs",
                         attempt + 1,
@@ -89,6 +149,7 @@ class LLMClient:
                         wait_time,
                     )
                     await asyncio.sleep(wait_time)
+                    tracer.finish_span(retry_span, status="ok")
                     continue
                 raise
 
@@ -131,17 +192,34 @@ class LLMClient:
     async def _call(
         self, prompt: str, system: str, max_tokens: int
     ) -> LLMResponse:
-        """Dispatch to the correct provider handler."""
+        """Dispatch to the correct provider handler and record cost via FinOps."""
         provider = self.config.provider
         if provider == Provider.ANTHROPIC:
-            return await self._call_anthropic(prompt, system, max_tokens)
-        if provider == Provider.OPENAI:
-            return await self._call_openai(prompt, system, max_tokens)
-        if provider == Provider.GOOGLE:
-            return await self._call_google(prompt, system, max_tokens)
-        if provider == Provider.PERPLEXITY:
-            return await self._call_perplexity(prompt, system, max_tokens)
-        raise ValueError(f"Provedor desconhecido: {provider}")
+            response = await self._call_anthropic(prompt, system, max_tokens)
+        elif provider == Provider.OPENAI:
+            response = await self._call_openai(prompt, system, max_tokens)
+        elif provider == Provider.GOOGLE:
+            response = await self._call_google(prompt, system, max_tokens)
+        elif provider == Provider.PERPLEXITY:
+            response = await self._call_perplexity(prompt, system, max_tokens)
+        else:
+            raise ValueError(f"Provedor desconhecido: {provider}")
+
+        # FinOps: record cost from every LLM call
+        try:
+            finops = get_finops()
+            finops.record_cost(
+                task_id=f"_llmclient_{self.config.name}",
+                provider_or_llm=self.config.name,
+                tokens_in=response.tokens_input,
+                tokens_out=response.tokens_output,
+                cost=response.cost,
+            )
+        except Exception:
+            # FinOps recording should never break the LLM call
+            logger.debug("FinOps recording failed for %s call", self.config.name, exc_info=True)
+
+        return response
 
     # ------------------------------------------------------------------
     # Anthropic (Claude)
@@ -164,7 +242,7 @@ class LLMClient:
         if system:
             body["system"] = system
 
-        async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             data = resp.json()
@@ -210,7 +288,7 @@ class LLMClient:
             "messages": messages,
         }
 
-        async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             data = resp.json()
@@ -259,7 +337,7 @@ class LLMClient:
             "generationConfig": {"maxOutputTokens": max_tokens},
         }
 
-        async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             data = resp.json()
@@ -305,7 +383,7 @@ class LLMClient:
             "messages": messages,
         }
 
-        async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             data = resp.json()

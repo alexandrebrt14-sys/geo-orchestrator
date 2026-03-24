@@ -20,6 +20,13 @@ class TaskStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class TaskComplexity(str, Enum):
+    """Complexity tier for cost-performance routing."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class Task(BaseModel):
     """A single discrete task inside a plan."""
     id: str
@@ -27,6 +34,7 @@ class Task(BaseModel):
     description: str
     dependencies: list[str] = Field(default_factory=list)
     expected_output: str = ""
+    complexity: TaskComplexity = TaskComplexity.MEDIUM
     assigned_llm: str | None = None
     status: TaskStatus = TaskStatus.PENDING
     result: str | None = None
