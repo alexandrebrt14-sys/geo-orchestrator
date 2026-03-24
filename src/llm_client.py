@@ -202,6 +202,8 @@ class LLMClient:
             response = await self._call_google(prompt, system, max_tokens)
         elif provider == Provider.PERPLEXITY:
             response = await self._call_perplexity(prompt, system, max_tokens)
+        elif provider == Provider.GROQ:
+            response = await self._call_groq(prompt, system, max_tokens)
         else:
             raise ValueError(f"Provedor desconhecido: {provider}")
 
@@ -346,6 +348,52 @@ class LLMClient:
         usage = data.get("usageMetadata", {})
         tokens_in = usage.get("promptTokenCount", 0)
         tokens_out = usage.get("candidatesTokenCount", 0)
+        cost = (
+            tokens_in / 1000 * self.config.cost_per_1k_input
+            + tokens_out / 1000 * self.config.cost_per_1k_output
+        )
+
+        return LLMResponse(
+            text=text,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            cost=cost,
+            model=self.config.model,
+            provider=self.config.provider.value,
+        )
+
+    # ------------------------------------------------------------------
+    # Groq (Llama 3.3 70B — OpenAI-compatible, ultra-fast inference)
+    # ------------------------------------------------------------------
+
+    async def _call_groq(
+        self, prompt: str, system: str, max_tokens: int
+    ) -> LLMResponse:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key or ''}",
+            "Content-Type": "application/json",
+        }
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        body = {
+            "model": self.config.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.post(url, headers=headers, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+
+        text = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        tokens_in = usage.get("prompt_tokens", 0)
+        tokens_out = usage.get("completion_tokens", 0)
         cost = (
             tokens_in / 1000 * self.config.cost_per_1k_input
             + tokens_out / 1000 * self.config.cost_per_1k_output

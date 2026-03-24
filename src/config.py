@@ -20,6 +20,7 @@ class Provider(str, Enum):
     OPENAI = "openai"
     GOOGLE = "google"
     PERPLEXITY = "perplexity"
+    GROQ = "groq"
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,17 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         max_tokens=4096,
         role="Pesquisador. Busca ao vivo com fontes, verificacao de fatos e citacoes.",
     ),
+    "groq": LLMConfig(
+        name="groq",
+        provider=Provider.GROQ,
+        model="llama-3.3-70b-versatile",
+        api_key_env="GROQ_API_KEY",
+        strengths=["ultra_fast_inference", "code_review", "quick_analysis", "translation", "summarization"],
+        cost_per_1k_input=0.00059,
+        cost_per_1k_output=0.00079,
+        max_tokens=8192,
+        role="Velocista. Inferencia ultra-rapida (~10x mais rapido que outros). Ideal para tarefas que precisam de velocidade: triagem, classificacao, traducao, resumos rapidos, code review leve.",
+    ),
 }
 
 
@@ -124,17 +136,17 @@ class TaskRouting:
 
 TASK_TYPES: dict[str, TaskRouting] = {
     "research":        TaskRouting(primary="perplexity", fallback="gemini"),
-    "analysis":        TaskRouting(primary="gemini",     fallback="claude"),
+    "analysis":        TaskRouting(primary="gemini",     fallback="groq"),
     "writing":         TaskRouting(primary="gpt4o",      fallback="claude"),
     "copywriting":     TaskRouting(primary="gpt4o",      fallback="claude"),
     "code":            TaskRouting(primary="claude",      fallback="gpt4o"),
-    "review":          TaskRouting(primary="claude",      fallback="gpt4o"),
+    "review":          TaskRouting(primary="claude",      fallback="groq"),
     "seo":             TaskRouting(primary="gpt4o",       fallback="perplexity"),
-    "data_processing": TaskRouting(primary="gemini",      fallback="gpt4o"),
+    "data_processing": TaskRouting(primary="gemini",      fallback="groq"),
     "fact_check":      TaskRouting(primary="perplexity",  fallback="gemini"),
-    "classification":  TaskRouting(primary="gemini",      fallback="claude"),
-    "translation":     TaskRouting(primary="gpt4o",       fallback="gemini"),
-    "summarization":   TaskRouting(primary="gemini",      fallback="gpt4o"),
+    "classification":  TaskRouting(primary="groq",        fallback="gemini"),
+    "translation":     TaskRouting(primary="groq",        fallback="gpt4o"),
+    "summarization":   TaskRouting(primary="groq",        fallback="gemini"),
 }
 
 
@@ -233,6 +245,7 @@ FINOPS_DAILY_LIMITS: dict[str, float] = {
     "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "2.00")),
     "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "1.00")),   # Billing ativo (R$500 credito)
     "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "1.00")),
+    "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "0.50")),     # Free tier generoso (30 RPM)
 }
 
 # Global daily budget (sum of all providers, with safety margin)

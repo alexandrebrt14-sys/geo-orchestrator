@@ -35,6 +35,7 @@ PROVIDER_LIMITS: dict[Provider, ProviderLimit] = {
     Provider.OPENAI: ProviderLimit(requests_per_minute=60, burst_size=3),
     Provider.GOOGLE: ProviderLimit(requests_per_minute=30, burst_size=3),  # Billing ativo (R$500 credito)
     Provider.PERPLEXITY: ProviderLimit(requests_per_minute=20, burst_size=2),
+    Provider.GROQ: ProviderLimit(requests_per_minute=30, burst_size=5),    # Free tier generoso, inferencia ultra-rapida
 }
 
 
