@@ -22,10 +22,12 @@ from .config import (
     LLM_CONFIGS,
     LLMConfig,
     OUTPUT_DIR,
+    Provider,
 )
 from .cost_tracker import CostTracker
 from .llm_client import LLMClient
 from .models import Plan, Task, TaskResult, TaskStatus
+from .rate_limiter import RateLimiter
 from .router import Router
 
 logger = logging.getLogger(__name__)
@@ -94,10 +96,35 @@ class Pipeline:
             # Save checkpoint before wave execution
             self._save_checkpoint(wave_idx, pending_ids)
 
-            # Run wave in parallel
-            await asyncio.gather(
-                *(self._run_task(tid, wave_idx) for tid in pending_ids)
-            )
+            # Separate Gemini tasks from others to stagger them
+            # (Gemini free tier = 10 RPM, needs ~6s gaps)
+            gemini_task_ids: list[str] = []
+            parallel_task_ids: list[str] = []
+
+            for tid in pending_ids:
+                task = self._task_map[tid]
+                routing = self.router.route(task)
+                if routing.provider == Provider.GOOGLE:
+                    gemini_task_ids.append(tid)
+                else:
+                    parallel_task_ids.append(tid)
+
+            # Run non-Gemini tasks in parallel + Gemini tasks staggered
+            tasks_to_run: list[asyncio.Task] = []
+
+            for tid in parallel_task_ids:
+                tasks_to_run.append(
+                    asyncio.create_task(self._run_task(tid, wave_idx))
+                )
+
+            if gemini_task_ids:
+                tasks_to_run.append(
+                    asyncio.create_task(
+                        self._run_gemini_staggered(gemini_task_ids, wave_idx)
+                    )
+                )
+
+            await asyncio.gather(*tasks_to_run)
 
             wave_duration_ms = int((time.perf_counter_ns() - wave_start) / 1_000_000)
             wave_info = {
@@ -389,6 +416,34 @@ class Pipeline:
             parts.append(f"--- Resultado da tarefa '{dep_id}' (truncado) ---\n{truncated}\n")
 
         return "\n".join(parts) if parts else ""
+
+    # ==================================================================
+    # Gemini staggered execution
+    # ==================================================================
+
+    async def _run_gemini_staggered(
+        self, task_ids: list[str], wave_index: int
+    ) -> None:
+        """Run Gemini-routed tasks sequentially with staggered gaps.
+
+        Gemini free tier allows 10 RPM = 1 request per 6 seconds.
+        The rate limiter handles the actual throttling, but we also
+        stagger task launches to avoid queuing up too many requests.
+        """
+        limiter = RateLimiter.get_instance()
+        gemini_interval = limiter.min_interval(Provider.GOOGLE)
+
+        for i, tid in enumerate(task_ids):
+            if i > 0:
+                logger.info(
+                    "Gemini stagger: waiting %.1fs before task '%s' (%d/%d)",
+                    gemini_interval,
+                    tid,
+                    i + 1,
+                    len(task_ids),
+                )
+                await asyncio.sleep(gemini_interval)
+            await self._run_task(tid, wave_index)
 
     # ==================================================================
     # Task execution

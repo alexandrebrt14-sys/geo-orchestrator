@@ -1,13 +1,17 @@
 """Configuration for the multi-LLM orchestrator.
 
-Defines LLM providers, model settings, task type routing, and cost parameters.
+Defines LLM providers, model settings, task type routing, cost parameters,
+and FinOps safety limits.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class Provider(str, Enum):
@@ -33,11 +37,26 @@ class LLMConfig:
 
     @property
     def api_key(self) -> str | None:
-        return os.environ.get(self.api_key_env)
+        """Get API key from environment. NEVER log or print this value."""
+        key = os.environ.get(self.api_key_env)
+        if key is None:
+            logger.warning("Missing API key for env var: %s", self.api_key_env)
+        return key
 
     @property
     def available(self) -> bool:
-        return bool(self.api_key)
+        return bool(os.environ.get(self.api_key_env))
+
+    def __repr__(self) -> str:
+        """Hide API key in string representation to prevent accidental exposure."""
+        return (
+            f"LLMConfig(name={self.name!r}, provider={self.provider.value!r}, "
+            f"model={self.model!r}, api_key_env={self.api_key_env!r})"
+        )
+
+    def __str__(self) -> str:
+        """Safe string representation — no secrets."""
+        return f"LLMConfig({self.name}, {self.provider.value}, {self.model})"
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +112,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
 
 
 # ---------------------------------------------------------------------------
-# Task-type → LLM routing table
+# Task-type -> LLM routing table
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -144,3 +163,18 @@ AVG_COST_PER_CALL: dict[str, float] = {
     "gemini":     0.001,
     "perplexity": 0.005,
 }
+
+
+# ---------------------------------------------------------------------------
+# FinOps: Per-provider daily budget limits (USD)
+# ---------------------------------------------------------------------------
+
+FINOPS_DAILY_LIMITS: dict[str, float] = {
+    "anthropic":  float(os.environ.get("FINOPS_LIMIT_ANTHROPIC", "0.50")),
+    "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "0.50")),
+    "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "0.00")),   # Free tier
+    "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "0.50")),
+}
+
+# Global daily budget (sum of all providers, with safety margin)
+FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "1.50"))

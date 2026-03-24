@@ -1,28 +1,35 @@
 """Unified async HTTP client for all 4 LLM providers.
 
-Handles API format differences, retries, timeouts, and cost calculation.
+Handles API format differences, retries with exponential backoff,
+timeouts, rate limiting, and cost calculation.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import random
 import time
 
 import httpx
 
 from .config import LLMConfig, Provider
 from .models import LLMResponse
+from .rate_limiter import RateLimiter
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
     """Async client that can query any of the 4 supported LLM providers."""
 
     TIMEOUT = 60.0
-    RETRY_DELAY = 3.0
-    MAX_RETRIES = 1
+    MAX_RETRIES = 2
+    BASE_RETRY_DELAY = 2.0  # seconds — exponential: 2s, 4s, 8s
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
+        self._rate_limiter = RateLimiter.get_instance()
 
     async def query(
         self,
@@ -32,27 +39,90 @@ class LLMClient:
     ) -> LLMResponse:
         """Send a prompt to the configured LLM and return a unified response.
 
-        Retries once on 429 (rate-limit) or 500 (server error).
+        Features:
+        - Per-provider rate limiting (respects RPM limits)
+        - Exponential backoff with jitter: 2s, 4s, 8s
+        - Respects Retry-After header on 429 responses
+        - Retries on 429 (rate-limit), 500 (server error), and timeouts
         """
+        if not prompt or not prompt.strip():
+            raise ValueError("Prompt cannot be empty")
+        if max_tokens <= 0:
+            raise ValueError(f"max_tokens must be positive, got {max_tokens}")
+
         last_error: Exception | None = None
 
         for attempt in range(1 + self.MAX_RETRIES):
             try:
+                # Acquire rate limiter slot before each attempt
+                await self._rate_limiter.acquire(self.config.provider)
                 return await self._call(prompt, system, max_tokens)
-            except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+
+            except httpx.HTTPStatusError as exc:
                 last_error = exc
-                retryable = False
-                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (429, 500):
-                    retryable = True
-                if isinstance(exc, httpx.TimeoutException):
-                    retryable = True
+                status = exc.response.status_code
+                retryable = status in (429, 500, 502, 503)
+
                 if retryable and attempt < self.MAX_RETRIES:
-                    await asyncio.sleep(self.RETRY_DELAY)
+                    wait_time = self._compute_backoff(attempt, exc)
+                    logger.warning(
+                        "Retry %d/%d for %s (HTTP %d): waiting %.1fs",
+                        attempt + 1,
+                        self.MAX_RETRIES,
+                        self.config.provider.value,
+                        status,
+                        wait_time,
+                    )
+                    await asyncio.sleep(wait_time)
                     continue
                 raise
 
-        # Should never reach here, but satisfy type checker
-        raise last_error  # type: ignore[misc]
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                if attempt < self.MAX_RETRIES:
+                    wait_time = self._compute_backoff(attempt)
+                    logger.warning(
+                        "Retry %d/%d for %s (timeout): waiting %.1fs",
+                        attempt + 1,
+                        self.MAX_RETRIES,
+                        self.config.provider.value,
+                        wait_time,
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                raise
+
+        # Should never reach here, but guarantee we always raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Unexpected state: no error captured in retry loop")
+
+    def _compute_backoff(
+        self,
+        attempt: int,
+        exc: httpx.HTTPStatusError | None = None,
+    ) -> float:
+        """Compute exponential backoff delay with jitter.
+
+        - Base: 2^(attempt+1) seconds -> 2s, 4s, 8s
+        - Jitter: random 0-1s added
+        - On 429: respects Retry-After header if present
+        """
+        # Check for Retry-After header on 429
+        if exc is not None and exc.response.status_code == 429:
+            retry_after = exc.response.headers.get("retry-after")
+            if retry_after:
+                try:
+                    server_wait = float(retry_after)
+                    # Add small jitter to server-specified wait
+                    return server_wait + random.uniform(0.1, 0.5)
+                except (ValueError, TypeError):
+                    pass
+
+        # Exponential backoff: 2s, 4s, 8s + jitter 0-1s
+        delay = self.BASE_RETRY_DELAY * (2 ** attempt)
+        jitter = random.uniform(0.0, 1.0)
+        return delay + jitter
 
     # ------------------------------------------------------------------
     # Provider-specific call dispatchers
