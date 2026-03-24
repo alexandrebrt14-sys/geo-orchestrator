@@ -36,6 +36,7 @@ from src.agents.researcher import ResearcherAgent
 from src.agents.writer import WriterAgent, WritingMode
 from src.agents.architect import ArchitectAgent
 from src.agents.analyzer import AnalyzerAgent
+from src.agents.groq_agent import GroqAgent
 from src.finops import FinOps, get_finops
 from src.templates.decomposition import DECOMPOSITION_PROMPT
 
@@ -84,6 +85,14 @@ MODELS = {
         "cost_1k_in": 0.00015,
         "cost_1k_out": 0.0006,
     },
+    "groq": {
+        "name": "llama-3.3-70b-versatile",
+        "provider": "Groq",
+        "env_key": "GROQ_API_KEY",
+        "tasks": ["classification", "summarization", "translation"],
+        "cost_1k_in": 0.00059,
+        "cost_1k_out": 0.00079,
+    },
 }
 
 COST_LOG_PATH = Path("output/cost_history.jsonl")
@@ -104,6 +113,9 @@ TASK_MODEL_MAP = {
     "classification": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
     "summarization": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
     "fact_check": ("sonar-pro", "Perplexity", "magenta"),
+    "classification": ("llama-3.3-70b", "Groq", "red"),
+    "summarization": ("llama-3.3-70b", "Groq", "red"),
+    "translation": ("llama-3.3-70b", "Groq", "red"),
     "deploy": ("local", "Execução Local", "white"),
 }
 
@@ -153,6 +165,8 @@ def _get_httpx_client(provider: str, timeout: float = 300.0) -> httpx.AsyncClien
     elif provider == "Google":
         # Gemini usa query param com GOOGLE_AI_API_KEY, não header
         pass
+    elif provider == "Groq":
+        headers["Authorization"] = f"Bearer {os.getenv('GROQ_API_KEY', '')}"
 
     return httpx.AsyncClient(headers=headers, timeout=timeout)
 
@@ -179,6 +193,11 @@ def _create_agent(task_type: str, writing_mode: str = "article"):
         cfg = MODELS["gemini-flash"]
         client = _get_httpx_client("Google")
         return AnalyzerAgent(client, model_name=cfg["name"])
+
+    elif task_type in ("classification", "summarization", "translation"):
+        cfg = MODELS["groq"]
+        client = _get_httpx_client("Groq")
+        return GroqAgent(client, model_name=cfg["name"])
 
     else:
         raise ValueError(f"Tipo de tarefa desconhecido: {task_type}")
@@ -494,6 +513,7 @@ def run(demand: str, dry_run: bool, verbose: bool, output_dir: str):
     banca.add_row("Redator", "gpt-4o", "OpenAI", "[green]ativo[/green]" if _check_api_key("OPENAI_API_KEY") else "[red]sem chave[/red]")
     banca.add_row("Arquiteto", "claude-opus-4-6", "Anthropic", "[green]ativo[/green]" if _check_api_key("ANTHROPIC_API_KEY") else "[red]sem chave[/red]")
     banca.add_row("Analista", "gemini-2.5-flash", "Google", "[green]ativo[/green]" if _check_api_key("GOOGLE_AI_API_KEY") else "[red]sem chave[/red]")
+    banca.add_row("Velocista", "llama-3.3-70b", "Groq", "[green]ativo[/green]" if _check_api_key("GROQ_API_KEY") else "[red]sem chave[/red]")
     console.print(banca)
     console.print()
 

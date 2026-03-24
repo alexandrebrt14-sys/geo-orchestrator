@@ -7,14 +7,19 @@ a demanda do usuário e quebrá-la em tarefas discretas com dependências.
 
 TASK_TYPES_REFERENCE = """
 TIPOS DE TAREFA DISPONÍVEIS:
-- research: Pesquisa aprofundada com fontes (usa Perplexity)
-- analysis: Análise de dados, classificação, sumarização (usa Gemini Flash)
+- research: Pesquisa aprofundada com fontes (usa Perplexity sonar-pro)
+- analysis: Análise de dados estruturada (usa Gemini 2.5 Flash)
 - writing: Redação de conteúdo longo em PT-BR (usa GPT-4o)
 - architecture: Design de sistema e geração de código (usa Claude Opus)
 - code_generation: Geração de código específico (usa Claude Opus)
 - review: Revisão de qualidade e consistência (usa Claude Opus)
+- classification: Classificação e triagem rápida (usa Groq/Llama 3.3 70B)
+- summarization: Sumarização e síntese rápida (usa Groq/Llama 3.3 70B)
+- translation: Tradução PT-BR <-> EN (usa Groq/Llama 3.3 70B)
 - deploy: Execução de deploy e verificação (automação local)
 - data_processing: Processamento de dados em lote (usa Gemini Flash)
+
+REGRA IMPORTANTE: Sempre inclua pelo menos uma tarefa do tipo classification, summarization ou translation para garantir que o Groq/Llama seja utilizado.
 """
 
 DECOMPOSITION_PROMPT = f"""Você é o orquestrador da Brasil GEO, responsável por decompor demandas complexas
@@ -22,17 +27,20 @@ em tarefas discretas que serão executadas por agentes especializados com difere
 
 {TASK_TYPES_REFERENCE}
 
-ROTEAMENTO DE LLMs:
-| Tipo de tarefa      | LLM            | Motivo                                       |
-|---------------------|----------------|----------------------------------------------|
-| research            | Perplexity     | Acesso a dados em tempo real com fontes       |
-| analysis            | Gemini Flash   | Rápido e barato para processar dados          |
-| writing             | GPT-4o         | Melhor qualidade para textos longos em PT-BR  |
-| architecture        | Claude Opus    | Superior em raciocínio complexo e código      |
-| code_generation     | Claude Opus    | Superior em geração de código de produção     |
-| review              | Claude Opus    | Melhor em análise crítica e edge cases        |
-| data_processing     | Gemini Flash   | Custo-benefício para operações em lote        |
-| deploy              | local          | Executado via scripts locais, sem LLM         |
+ROTEAMENTO DE LLMs (5 providers):
+| Tipo de tarefa      | LLM              | Motivo                                       |
+|---------------------|------------------|----------------------------------------------|
+| research            | Perplexity       | Acesso a dados em tempo real com fontes       |
+| analysis            | Gemini 2.5 Flash | Rápido e barato para processar dados          |
+| writing             | GPT-4o           | Melhor qualidade para textos longos em PT-BR  |
+| architecture        | Claude Opus      | Superior em raciocínio complexo e código      |
+| code_generation     | Claude Opus      | Superior em geração de código de produção     |
+| review              | Claude Opus      | Melhor em análise crítica e edge cases        |
+| classification      | Groq/Llama 3.3   | Ultra-rápido para triagem e classificação     |
+| summarization       | Groq/Llama 3.3   | Ultra-rápido para síntese e resumos           |
+| translation         | Groq/Llama 3.3   | Ultra-rápido para tradução PT-BR/EN           |
+| data_processing     | Gemini Flash     | Custo-benefício para operações em lote        |
+| deploy              | local            | Executado via scripts locais, sem LLM         |
 
 REGRAS DE DECOMPOSIÇÃO:
 1. Cada tarefa deve ser ATÔMICA — uma ação clara com um resultado definido.
