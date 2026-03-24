@@ -94,7 +94,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         strengths=["fast_analysis", "bulk_processing", "summarization", "classification", "cheap"],
         cost_per_1k_input=0.00015,
         cost_per_1k_output=0.0006,
-        max_tokens=8192,
+        max_tokens=16384,
         role="Analista rapido. Processamento em massa, resumos, classificacao e triagem de dados.",
     ),
     "perplexity": LLMConfig(
@@ -177,22 +177,24 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 TIMEOUT_BY_TASK_TYPE: dict[str, float] = {
-    "research":        45.0,   # Perplexity needs time to search the web
-    "writing":         60.0,   # Long-form content generation
-    "copywriting":     60.0,   # Long-form content generation
-    "code":            60.0,   # Complex code generation
-    "review":          45.0,   # Detailed review takes time
-    "seo":             45.0,   # SEO analysis
-    "analysis":        20.0,   # Fast analytical tasks
-    "classification":  20.0,   # Quick classification
-    "summarization":   20.0,   # Fast summarization
-    "data_processing": 20.0,   # Bulk but simple
-    "fact_check":      30.0,   # Moderate — needs web search
-    "translation":     30.0,   # Moderate
+    "research":        60.0,   # Perplexity needs time to search the web
+    "writing":        120.0,   # Long-form content generation
+    "copywriting":    120.0,   # Long-form content generation
+    "code":           300.0,   # Complex code generation (Claude needs time)
+    "architecture":   300.0,   # System design (Claude needs time)
+    "code_generation":300.0,   # Complex code generation (Claude needs time)
+    "review":         120.0,   # Detailed review takes time
+    "seo":             60.0,   # SEO analysis
+    "analysis":        45.0,   # Analytical tasks
+    "classification":  30.0,   # Quick classification
+    "summarization":   30.0,   # Fast summarization
+    "data_processing": 45.0,   # Bulk processing
+    "fact_check":      60.0,   # Needs web search
+    "translation":     60.0,   # Moderate
 }
 
 # Default timeout for unknown task types
-DEFAULT_TIMEOUT: float = 45.0
+DEFAULT_TIMEOUT: float = 120.0
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +204,7 @@ DEFAULT_TIMEOUT: float = 45.0
 from pathlib import Path  # noqa: E402
 
 # Maximum allowed cost (USD) per single orchestration run
-BUDGET_LIMIT: float = float(os.environ.get("GEO_BUDGET_LIMIT", "1.00"))
+BUDGET_LIMIT: float = float(os.environ.get("GEO_BUDGET_LIMIT", "5.00"))
 
 # Base output directory (relative to project root)
 OUTPUT_DIR: Path = Path(os.environ.get("GEO_OUTPUT_DIR", "output"))
@@ -227,11 +229,11 @@ AVG_COST_PER_CALL: dict[str, float] = {
 # ---------------------------------------------------------------------------
 
 FINOPS_DAILY_LIMITS: dict[str, float] = {
-    "anthropic":  float(os.environ.get("FINOPS_LIMIT_ANTHROPIC", "0.50")),
-    "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "0.50")),
-    "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "0.00")),   # Free tier
-    "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "0.50")),
+    "anthropic":  float(os.environ.get("FINOPS_LIMIT_ANTHROPIC", "2.00")),
+    "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "2.00")),
+    "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "1.00")),   # Billing ativo (R$500 credito)
+    "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "1.00")),
 }
 
 # Global daily budget (sum of all providers, with safety margin)
-FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "1.50"))
+FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "5.00"))

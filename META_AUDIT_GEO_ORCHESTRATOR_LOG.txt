@@ -1,0 +1,497 @@
+================================================================================
+  META-AUDITORIA DO GEO-ORCHESTRATOR — 4 LLMs como Auditores
+  Data: 24 de marco de 2026
+  Metodo: Cada LLM executou uma tarefa especializada de auditoria
+================================================================================
+
+DISTRIBUICAO DE TAREFAS:
+
+  TASK 1 — Claude (Architect): Auditoria de boas praticas e seguranca
+  TASK 2 — GPT-4o (Writer): Revisao de documentacao
+  TASK 3 — Perplexity (Researcher): Pesquisa sobre Gemini API rate limits
+  TASK 4 — Claude (Dev): Plano de correcao do Gemini 429 errors
+
+================================================================================
+  RESULTADOS DETALHADOS
+================================================================================
+
+--- ARCHITECT_CLAUDE (Claude, 13.4s) ---
+
+# AUDITORIA: Orquestrador Multi-LLM
+
+## 🔴 CRÍTICO
+
+### 1. **Exposição de Chaves de API em Logs**
+**Arquivo:** `src/config.py`, linhas 36-48  
+**Função:** `LLMConfig.api_key` property
+
+```python
+@property
+def api_key(self) -> str | None:
+    return os.environ.get(self.api_key_env)
+```
+
+**Problema:** A chave é acessível como propriedade pública. Se impressa em logs, exceções ou debugging, expõe credenciais.
+
+**Correção:**
+```python
+@property
+def api_key(self) -> str | None:
+    """Get API key. NEVER log or print this value."""
+    key = os.environ.get(self.api_key_env)
+    if key is None:
+        logger.warning(f"Missing API key for env var: {self.api_key_env}")
+    return key
+
+def __repr__(self) -> str:
+    """Hide API key in string representation."""
+    return (f"LLMConfig(name={self.name}, provider={self.provider.value}, "
+            f"model={self.model}, api_key_env={self.api_key_env})")
+```
+
+---
+
+### 2. **Tratamento Incompleto de Exceções - Linha Inacessível**
+**Arquivo:** `src/llm_client.py`, linhas 49-52
+
+```python
+        # Should never reach here, but satisfy type checker
+        raise last_error  # type: ignore[misc]
+```
+
+**Problema:** 
+- Se `MAX_RETRIES=1`, o loop executa 2 iterações. Se ambas falham e a segunda não é retentável, `last_error` é None.
+- Ignora tipo (`# type: ignore[misc]`) esconde bug real.
+- Lógica de retry está quebrada: nunca atinge o `raise last_error`.
+
+**Correção:**
+```python
+async def query(
+    self,
+    prompt: str,
+    system: str = "",
+    max_tokens: int = 4000,
+) -> LLMResponse:
+    """Send a prompt to the configured LLM and return a unified response."""
+    last_error: Exception | None = None
+
+    for attempt in range(1 + self.MAX_RETRIES):
+        try:
+            return await self._call(prompt, system, max_tokens)
+        except (httpx.HTTPStatusError, httpx.TimeoutException) as exc:
+            last_error = exc
+            retryable = (
+                (isinstance(exc, httpx.HTTPStatusError) and 
+                 exc.response.status_code in (429, 500)) or
+                isinstance(exc, httpx.TimeoutException)
+            )
+            if retryable and attempt < self.MAX_RETRIES:
+                await asyncio.sleep(self.RETRY_DELAY)
+                continue
+            # Não tentaremos mais, sai do loop
+            break
+
+    # Garante que sempre há erro para lançar
+    if last_error is None:
+        raise RuntimeError("Unexpected state: no error captured in retry loop")
+    raise last_error
+```
+
+---
+
+## 🟠 ALTO
+
+### 3. **Gestão de Estado Compartilhado Sem Sincronização**
+**Arquivo:** `src/router.py`, linhas 31-34
+
+```python
+def __init__(self) -> None:
+    self._rate_limited: set[str] = set()
+    self._stats_path: Path = OUTPUT_DIR / ".router_stats.json"
+    self._stats: dict = self._load_stats()
+```
+
+**Problema:** 
+- `_rate_limited` e `_stats` são mutáveis e compartilhados entre corrotinas async.
+- Sem `asyncio.Lock`, race conditions causam inconsistência.
+- `_load_stats()` não trata exceção se arquivo corrompido ou permissões insuficientes.
+
+**Correção:**
+```python
+import asyncio
+from typing import AsyncContextManager
+
+class Router:
+    def __init__(self) -> None:
+        self._rate_limited: set[str] = set()
+        self._stats_lock = asyncio.Lock()
+        self._rate_limited_lock = asyncio.Lock()
+        self._stats_path: Path = OUTPUT_DIR / ".router_stats.json"
+        self._stats: dict = self._load_stats()
+
+    def _load_stats(self) -> dict:
+        """Load historical routing stats from disk."""
+        try:
+            if not self._stats_path.exists():
+                return {}
+            with open(self._stats_path, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Failed to load stats: {e}. Starting fresh.")
+            return {}
+
+    async def mark_rate_limited(self, llm_name: str) -> None:
+        """Flag an LLM as temporarily rate-limited (thread-safe)."""
+        async with self._rate_limited_lock:
+            self._rate_limited.add(llm_name)
+
+    async def get_stats(self) -> dict:
+        """Thread-safe stats access."""
+        async with self._stats_lock:
+            return self._stats.copy()
+```
+
+---
+
+### 4. **Falta de Validação de Entrada**
+**Arquivo:** `src/llm_client.py`, linhas 17-22
+
+```python
+async def query(
+    self,
+    prompt: str,
+    system: str = "",
+    max_tokens: int = 4000,
+) -> LLMResponse:
+```
+
+**Problema:** 
+- `prompt` vazio não é rejeitado.
+- `max_tokens` negativo não é validado.
+- Sem sanitização, injeção em templates de prompt.
+
+**Correção:**
+```python
+async def query(
+    self,
+    prompt: str,
+    system: str = "",
+    max_
+
+--- WRITER_GPT4O (GPT-4o, 14.4s) ---
+
+### Gaps, Inconsistências e Melhorias na Documentação
+
+1. **Coerência nos Nomes**: 
+   - O LLM "GPT-4o" foi mencionado, mas em algumas partes, como na tabela usada para detalhar funções, a nomenclatura idealmente deveria seguir uma padronização (ex: "GPT-4" em vez de "GPT-4o").
+   - Considere padronizar o uso deste termo em toda a documentação.
+
+2. **Instruções de Instalação Incompletas**:
+   - O trecho da instalação apresenta um comando para clonar o repositório que está truncado. A linha `cd C:/Sandyboxclaude/geo-orche` deve ser complementada com instruções completas, incluindo a execução de outros comandos necessários para um funcionamento adequado (ex: `git clone <URL do repositório>`).
+   - Não há explicação sobre requerimentos (dependências) que precisam ser instalados antes de executar o código.
+
+3. **Descrição do Agente**: 
+   - Embora a definição de "Agentes" seja clara, não está explicado como os agentes são implementados. Uma breve explicação sobre a estrutura do código base e onde cada um dos agentes pode ser encontrado ou configurado ajudaria os desenvolvedores a entender melhor.
+   - Faltam exemplos de como criar ou modificar um agente personalizável.
+
+4. **Exemplo de Decomposição**:
+   - O exemplo é válido, mas não faz referência à forma como os resultados devem ser interpretados na prática. Incluir uma explicação sobre como os resultados de cada tarefa devem ser utilizados poderia melhorar a compreensão do fluxo da operação.
+
+5. **Seção de "Uso de cada LLM"**:
+   - Poderia incluir detalhes sobre as APIs ou bibliotecas que são usadas para integração com cada LLM. Isso daria aos desenvolvedores uma ideia clara de como interagir tecnicamente com cada um deles.
+
+6. **Teste e Validação**: 
+   - Não há menção a como testar ou validar a funcionalidade do geo-orchestrator. Incluir uma seção introdutória de testes, ou uma abordagem para garantir que a integração entre diferentes LLMs funcione adequadamente, é crucial.
+
+7. **Seção de Problemas Comuns e Soluções**:
+   - Recomendo a adição de uma seção de "Solução de Problemas" ou "FAQ", onde questões frequentes possam ser abordadas, assim como possíveis erros e soluções.
+
+8. **Atualização sobre Dependências do Projeto**:
+   - O documento não menciona quais dependências específicas são necessárias para que o sistema funcione (ex: bibliotecas Python). Isso é fundamental para que os usuários possam configurar corretamente o ambiente.
+
+9. **Segurança e Considerações Éticas**:
+   - Considerações acerca da ética no uso de IA e como o sistema lida com dados sensíveis poderiam ser discutidas. Isso é especialmente importante para usuários em setores regulados.
+
+10. **Formatação e Legibilidade**:
+   - Algumas tabelas poderiam ser melhor formatadas para garantir legibilidade em diferentes plataformas (incluir um visual em Markdown mais amigável).
+
+11. **Glossário**:
+   - Incluir um glossário de termos técnicos e siglas que são usados na documentação ajudaria novos usuários a entender melhor o conteúdo.
+
+12. **Feedback e Contribuição**:
+   - Incluir diretrizes de contribuição e canais de feedback para usuários que queiram colaborar ou reportar problemas.
+
+Ao implementar essas melhorias, a documentação não apenas se tornará mais completa, mas também mais acessível, a um público mais amplo, facilitando a utilização e o desenvolvimento do geo-orchestrator.
+
+--- RESEARCHER_PERPLEXITY (Perplexity, 9.1s) ---
+
+**Limites do free tier da Gemini API para gemini-2.5-flash (2026):** RPM de 10 requests por minuto, TPM de 250.000 tokens por minuto e RPD de 250 requests por dia. Para **gemini-2.0-flash**, não há dados específicos nos resultados de busca, mas modelos semelhantes como 2.5 Flash seguem esses limites; presume-se variação similar ou inclusão no free tier com 5-15 RPM geral[1][3][4][5].
+
+### Detalhes dos limites por modelo (free tier, confirmados em fevereiro 2026)
+Após reduções em dezembro 2025, os limites do free tier (sem cartão de crédito) são:
+| Modelo            | **RPM** | **TPM**   | **RPD** |
+|-------------------|---------|-----------|---------|
+| Gemini 2.5 Flash | **10** | **250.000** | **250** |[3][4][5]
+- Gemini 2.5 Flash-Lite: 15 RPM, 250K TPM, 1.000 RPD (para comparação)[3][5].
+- Esses limites aplicam-se a projetos ativos ou free trial no Google AI Studio, com contexto de 1 milhão de tokens[1][2][3].
+
+### Estratégias para evitar erros 429 (quota exceeded)
+- **Monitore quotas em tempo real:** Verifique limites no dashboard do Google AI Studio e implemente contadores locais de RPM/TPM/RPD[2][3].
+- **Agrupamento de requests:** Combine múltiplas consultas em um único prompt para reduzir RPM e otimizar TPM[3].
+- **Upgrade para tiers pagos:** Ative billing para Tier 1 (instantâneo: 150-300 RPM, 1M TPM, 1.500 RPD); Tier 2 exige US$250 gastos cumulativos[2][3][5].
+- **Distribua carga:** Use múltiplos projetos ou proxies, mas evite abuso para não violar termos[1][3].
+- **Pré-processamento:** Cache respostas comuns e use context caching (pago: US$0.025/1M tokens)[6].
+
+### Implementação correta de exponential backoff
+Para tratar 429, use backoff exponencial com jitter para evitar thundering herd. Exemplo em Python (usando `tenacity` ou nativo):
+
+```python
+import time
+import random
+from requests.exceptions import HTTPError
+
+def make_request_with_backoff(url, max_retries=5):
+    retry_delay = 1  # Base delay em segundos
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url)  # Sua chamada à API Gemini
+            response.raise_for_status()
+            return response.json()
+        except HTTPError as e:
+            if e.response.status_code == 429:
+                # Exponential backoff: 2^attempt + jitter (0-1s)
+                delay = (2 ** attempt) * retry_delay + random.uniform(0, 1)
+                print(f"429 detectado. Aguardando {delay:.2f}s (tentativa {attempt+1}/{max_retries})")
+                time.sleep(delay)
+            else:
+                raise
+    raise Exception("Máximo de retentativas excedido")
+```
+
+- **Parâmetros ideais:** Inicie com 1s, multiplique por 2 por tentativa, adicione jitter randômico (0-1s). Máximo 5-8 retries. Monitore `retry-after` header se presente[3].
+- Teste em produção para ajustar, pois limites variam por modelo e tier[2][3].
+
+--- DEV_CLAUDE (Claude, 10.4s) ---
+
+# Análise e Correção Robusta para Gemini (e outros LLMs) - 429 Errors
+
+## Problema Identificado
+
+```
+Free Tier Gemini: 15 RPM (1 request a cada 4 segundos)
+Código atual: retry simples, sem rate limiting local, sem fila
+Resultado: múltiplas requisições em paralelo -> 429 errors
+```
+
+## Solução Completa com 3 Camadas
+
+### 1️⃣ **Rate Limiter Local (Token Bucket + Per-Provider)**
+
+```python
+# rate_limiter.py
+"""Rate limiter com estratégia token bucket por provider."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass
+from enum import Enum
+
+
+class Provider(str, Enum):
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    GOOGLE = "google"
+    PERPLEXITY = "perplexity"
+
+
+@dataclass
+class RateLimitConfig:
+    """Configuração de rate limit por provider."""
+    requests_per_minute: int
+    burst_size: int = 2  # Permite 2 requests seguidos, depois respeita RPM
+
+
+class TokenBucketLimiter:
+    """Token bucket algorithm - permite rajadas controladas."""
+
+    def __init__(self, config: RateLimitConfig) -> None:
+        self.rpm = config.requests_per_minute
+        self.burst_size = config.burst_size
+        self.tokens = float(config.burst_size)  # Começa com burst cheio
+        self.last_update = time.time()
+        self.lock = asyncio.Lock()
+        
+        # Tokens adicionados por segundo: RPM / 60
+        self.refill_rate = config.requests_per_minute / 60.0
+
+    async def acquire(self) -> None:
+        """Espera até ter 1 token disponível."""
+        async with self.lock:
+            while self.tokens < 1.0:
+                # Calcula quanto tempo esperar
+                now = time.time()
+                elapsed = now - self.last_update
+                self.tokens += elapsed * self.refill_rate
+                
+                if self.tokens < 1.0:
+                    # Quanto tempo falta para 1 token?
+                    wait_time = (1.0 - self.tokens) / self.refill_rate
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                self.last_update = now
+                break
+            
+            # Consome 1 token
+            self.tokens -= 1.0
+            self.last_update = time.time()
+
+    def get_status(self) -> dict:
+        """Debug: retorna estado atual."""
+        now = time.time()
+        elapsed = now - self.last_update
+        current_tokens = min(
+            self.tokens + elapsed * self.refill_rate,
+            float(self.burst_size)
+        )
+        return {
+            "tokens": round(current_tokens, 2),
+            "max_burst": self.burst_size,
+            "rpm": self.rpm,
+        }
+
+
+# Configurações por provider (free tier oficial)
+RATE_LIMIT_CONFIGS = {
+    Provider.GOOGLE: RateLimitConfig(requests_per_minute=15, burst_size=1),
+    Provider.OPENAI: RateLimitConfig(requests_per_minute=3500, burst_size=10),
+    Provider.ANTHROPIC: RateLimitConfig(requests_per_minute=50, burst_size=3),
+    Provider.PERPLEXITY: RateLimitConfig(requests_per_minute=20, burst_size=2),
+}
+```
+
+### 2️⃣ **Fila com Prioridade e Backoff Exponencial**
+
+```python
+# request_queue.py
+"""Fila de requisições com retry inteligente e backoff exponencial."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable, Coroutine
+
+import httpx
+
+
+class RetryStrategy(str, Enum):
+    EXPONENTIAL = "exponential"
+    LINEAR = "linear"
+    FIXED = "fixed"
+
+
+@dataclass
+class QueuedRequest:
+    """Uma requisição na fila de execução."""
+    func: Callable[..., Coroutine]
+    args: tuple = field(default_factory=tuple)
+    kwargs: dict = field(default_factory=dict)
+    priority: int = 0  # Maior = maior prioridade
+    attempt: int = 0
+    max_attempts: int = 5
+    
+    async def execute(self) -> any:
+        return await self.func(*self.args, **self.kwargs)
+
+
+class ExponentialBackoff:
+    """Backoff exponencial com jitter."""
+    
+    def __init__(
+        self,
+        initial_delay: float = 2.0,
+        max_delay: float = 120.0,
+        multiplier: float = 2.0,
+        jitter: bool = True,
+    ) -> None:
+        self.initial_delay = initial_delay
+        self.max_delay = max_delay
+        self.multiplier = multiplier
+        self.jitter = jitter
+    
+    def calculate(self, attempt: int) -> float:
+        """Calcula delay para tentativa N."""
+        delay = min(
+            self.initial_delay * (self.multiplier ** attempt),
+            self.max_delay
+        )
+        
+        if self.jitter:
+            import random
+            # Jitter: 0 a 100% do delay
+            delay *= random.uniform(0.5, 1.0)
+        
+        return delay
+
+
+class RequestQueue:
+    """Fila thread-safe com retry automático."""
+    
+    def __init__(self, max_concurrent: int = 1) -> None:
+        self.queue: asyncio.PriorityQueue[tuple[int, int, QueuedRequest]] = (
+            async
+
+
+================================================================================
+  CORRECOES IMPLEMENTADAS
+================================================================================
+
+1. RATE LIMITER (src/rate_limiter.py) — NOVO
+   Token bucket per-provider com RPM configuravel:
+   - Anthropic: 60 RPM (burst 3)
+   - OpenAI: 60 RPM (burst 3)
+   - Google/Gemini: 10 RPM (burst 1) — free tier
+   - Perplexity: 20 RPM (burst 2)
+   Singleton compartilhado entre todos os clientes.
+
+2. EXPONENTIAL BACKOFF (src/llm_client.py) — CORRIGIDO
+   - De: delay fixo 3s
+   - Para: 2s, 4s, 8s + jitter aleatorio 0-1s
+   - Retry-After header respeitado quando presente
+   - Status retryable expandido: 429, 500, 502, 503
+
+3. API KEY MASKING (src/config.py) — CORRIGIDO
+   - __repr__ mostra apenas api_key_env, nunca o valor
+   - Warning quando key esta ausente
+   - FinOps daily limits per provider adicionado
+
+4. GEMINI STAGGER (src/pipeline.py) — CORRIGIDO
+   - Tasks Gemini executam com gap de 6s entre si
+   - Outras providers mantem paralelismo total
+   - Log de stagger com timing
+
+5. FINOPS DAILY LIMITS (src/config.py) — NOVO
+   - Gemini: /usr/bin/bash.00/dia (free tier)
+   - OpenAI: /usr/bin/bash.50/dia
+   - Anthropic: /usr/bin/bash.50/dia
+   - Perplexity: /usr/bin/bash.50/dia
+   - Global: .50/dia
+
+================================================================================
+  METRICAS FINAIS DO PROJETO
+================================================================================
+
+  Arquivos Python: 19 (todos sintaticamente validos)
+  Linhas Python: 3.726
+  Linhas totais (com docs): ~5.100
+  LLMs integrados: 4 (Claude, GPT-4o, Gemini, Perplexity)
+  Rate limiter: Token bucket per-provider
+  FinOps: Budget guard global + daily per-provider
+  GitHub: github.com/alexandrebrt14-sys/geo-orchestrator
+
+================================================================================

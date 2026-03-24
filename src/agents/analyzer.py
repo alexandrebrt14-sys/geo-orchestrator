@@ -8,6 +8,7 @@ classificação e operações em lote com saída estruturada.
 from __future__ import annotations
 
 import json
+import os
 import re
 import logging
 from typing import Any
@@ -121,8 +122,10 @@ class AnalyzerAgent(BaseAgent):
                 "parts": [{"text": system_instruction}],
             }
 
+        api_key = os.getenv("GOOGLE_AI_API_KEY", "")
         response = await self.llm_client.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent",
+            params={"key": api_key},
             json=payload,
         )
         response.raise_for_status()

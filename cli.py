@@ -77,12 +77,12 @@ MODELS = {
         "cost_1k_out": 0.075,
     },
     "gemini-flash": {
-        "name": "gemini-2.0-flash",
+        "name": "gemini-2.5-flash",
         "provider": "Google",
-        "env_key": "GOOGLE_API_KEY",
+        "env_key": "GOOGLE_AI_API_KEY",
         "tasks": ["analysis", "data_processing"],
-        "cost_1k_in": 0.000075,
-        "cost_1k_out": 0.0003,
+        "cost_1k_in": 0.00015,
+        "cost_1k_out": 0.0006,
     },
 }
 
@@ -92,7 +92,7 @@ REPORT_DIR = Path("output")
 # Mapeamento tipo de tarefa → modelo + provider para narração
 TASK_MODEL_MAP = {
     "research": ("sonar-pro", "Perplexity", "magenta"),
-    "analysis": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
+    "analysis": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
     "writing": ("gpt-4o", "OpenAI", "green"),
     "copywriting": ("gpt-4o", "OpenAI", "green"),
     "seo": ("gpt-4o", "OpenAI", "green"),
@@ -100,9 +100,9 @@ TASK_MODEL_MAP = {
     "architecture": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
     "code_generation": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
     "review": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
-    "data_processing": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
-    "classification": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
-    "summarization": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
+    "data_processing": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
+    "classification": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
+    "summarization": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
     "fact_check": ("sonar-pro", "Perplexity", "magenta"),
     "deploy": ("local", "Execução Local", "white"),
 }
@@ -139,7 +139,7 @@ def _check_api_key(env_key: str) -> bool:
     return bool(os.getenv(env_key))
 
 
-def _get_httpx_client(provider: str) -> httpx.AsyncClient:
+def _get_httpx_client(provider: str, timeout: float = 300.0) -> httpx.AsyncClient:
     """Retorna um cliente httpx configurado para o provider."""
     headers: dict[str, str] = {}
 
@@ -151,10 +151,10 @@ def _get_httpx_client(provider: str) -> httpx.AsyncClient:
         headers["x-api-key"] = os.getenv("ANTHROPIC_API_KEY", "")
         headers["anthropic-version"] = "2023-06-01"
     elif provider == "Google":
-        # Gemini usa query param, mas adicionamos header por consistência
+        # Gemini usa query param com GOOGLE_AI_API_KEY, não header
         pass
 
-    return httpx.AsyncClient(headers=headers, timeout=300.0)
+    return httpx.AsyncClient(headers=headers, timeout=timeout)
 
 
 def _create_agent(task_type: str, writing_mode: str = "article"):
@@ -493,7 +493,7 @@ def run(demand: str, dry_run: bool, verbose: bool, output_dir: str):
     banca.add_row("Pesquisador", "sonar-pro", "Perplexity", "[green]ativo[/green]" if _check_api_key("PERPLEXITY_API_KEY") else "[red]sem chave[/red]")
     banca.add_row("Redator", "gpt-4o", "OpenAI", "[green]ativo[/green]" if _check_api_key("OPENAI_API_KEY") else "[red]sem chave[/red]")
     banca.add_row("Arquiteto", "claude-opus-4-6", "Anthropic", "[green]ativo[/green]" if _check_api_key("ANTHROPIC_API_KEY") else "[red]sem chave[/red]")
-    banca.add_row("Analista", "gemini-2.0-flash", "Google", "[green]ativo[/green]" if _check_api_key("GOOGLE_API_KEY") else "[red]sem chave[/red]")
+    banca.add_row("Analista", "gemini-2.5-flash", "Google", "[green]ativo[/green]" if _check_api_key("GOOGLE_AI_API_KEY") else "[red]sem chave[/red]")
     console.print(banca)
     console.print()
 
