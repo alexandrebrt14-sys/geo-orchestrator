@@ -1,8 +1,7 @@
 """Task router — decides which LLM handles each task.
 
-Uses the TASK_TYPES routing table, checks API key availability,
-provides fallback selection, and adaptively learns from success/failure
-rates to prefer reliable, cost-effective LLMs over time.
+Uses cost-performance tiers, fallback chains per task type,
+adaptive learning from success/failure rates, and complexity-aware routing.
 """
 
 from __future__ import annotations
@@ -12,8 +11,15 @@ import logging
 import time
 from pathlib import Path
 
-from .config import LLM_CONFIGS, TASK_TYPES, OUTPUT_DIR, LLMConfig
-from .models import Task
+from .config import (
+    FALLBACK_CHAINS,
+    LLM_CONFIGS,
+    MODEL_TIERS,
+    OUTPUT_DIR,
+    TASK_TYPES,
+    LLMConfig,
+)
+from .models import Task, TaskComplexity
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +36,35 @@ _MIN_SAMPLES = 3
 
 
 class Router:
-    """Route tasks to the most suitable LLM based on task type, availability,
-    historical success rates, cost, and latency."""
+    """Route tasks to the most suitable LLM based on task type, complexity,
+    availability, historical success rates, cost, and latency.
+
+    Routing priority:
+    1. Adaptive stats (data-driven, if enough samples exist)
+    2. Complexity-tier routing (low/medium/high -> cheap/balanced/premium)
+    3. Fallback chain per task type (ordered priority list)
+    4. Static primary/fallback from TASK_TYPES table
+    5. Any available LLM (last resort)
+    """
 
     def __init__(self) -> None:
         self._rate_limited: set[str] = set()
         self._stats_path: Path = OUTPUT_DIR / ".router_stats.json"
         self._stats: dict = self._load_stats()
+        # Session-level load balancer: tracks tasks assigned per LLM this session
+        self._session_usage: dict[str, int] = {name: 0 for name in LLM_CONFIGS}
+
+    def record_assignment(self, llm_name: str) -> None:
+        """Track that an LLM was assigned a task in this session."""
+        self._session_usage[llm_name] = self._session_usage.get(llm_name, 0) + 1
+
+    def get_session_usage(self) -> dict[str, int]:
+        """Return task assignment counts for this session."""
+        return dict(self._session_usage)
+
+    def _least_used_llm(self, candidates: list[str]) -> str:
+        """Among candidates, return the one with fewest assignments this session."""
+        return min(candidates, key=lambda n: self._session_usage.get(n, 0))
 
     # ------------------------------------------------------------------
     # Rate-limit management
@@ -55,17 +83,7 @@ class Router:
     # ------------------------------------------------------------------
 
     def _load_stats(self) -> dict:
-        """Load historical routing stats from disk.
-
-        Format: {
-            "task_type:llm_name": {
-                "successes": int,
-                "failures": int,
-                "total_latency_ms": int,
-                "total_cost": float
-            }
-        }
-        """
+        """Load historical routing stats from disk."""
         if self._stats_path.exists():
             try:
                 return json.loads(self._stats_path.read_text(encoding="utf-8"))
@@ -122,7 +140,7 @@ class Router:
         key = f"{task_type}:{llm}"
         entry = self._stats.get(key)
         if not entry:
-            return 10000.0  # default high latency for unknown
+            return 10000.0
         total = entry["successes"] + entry["failures"]
         if total == 0:
             return 10000.0
@@ -135,7 +153,6 @@ class Router:
         if not entry:
             cfg = LLM_CONFIGS.get(llm)
             if cfg:
-                # Rough estimate: 1K tokens in + 1K tokens out
                 return cfg.cost_per_1k_input + cfg.cost_per_1k_output
             return 0.01
         total = entry["successes"] + entry["failures"]
@@ -144,23 +161,15 @@ class Router:
         return entry["total_cost"] / total
 
     def _compute_score(self, task_type: str, llm: str) -> float:
-        """Compute weighted routing score.
-
-        score = (success_rate * 0.6) + (1/cost * 0.2) + (1/latency * 0.2)
-        Higher is better. All components are normalized to [0, 1] range.
-        """
+        """Compute weighted routing score. Higher is better."""
         success_rate = self._get_success_rate(task_type, llm)
         if success_rate is None:
-            success_rate = 0.8  # optimistic default for untested combos
+            success_rate = 0.8
 
         avg_cost = max(self._get_avg_cost(task_type, llm), 0.0001)
         avg_latency = max(self._get_avg_latency(task_type, llm), 1.0)
 
-        # Normalize cost: lower is better, cap inverse at 1.0
-        # Gemini ~0.001, Claude ~0.09, so 1/cost ranges widely
         cost_score = min(1.0 / (avg_cost * 100), 1.0)
-
-        # Normalize latency: lower is better
         latency_score = min(1000.0 / avg_latency, 1.0)
 
         return (
@@ -179,19 +188,16 @@ class Router:
             return None
 
         candidates = [routing.primary, routing.fallback]
-        # Also consider all available LLMs
         for name in LLM_CONFIGS:
             if name not in candidates and self._is_usable(name):
                 candidates.append(name)
 
-        # Only override if we have real stats
         scored: list[tuple[str, float]] = []
         for llm in candidates:
             if not self._is_usable(llm):
                 continue
             rate = self._get_success_rate(task_type, llm)
             if rate is not None:
-                # Check failure threshold: if primary fails too much, penalize it
                 if rate < (1.0 - _FAILURE_THRESHOLD):
                     logger.info(
                         "LLM '%s' has %.0f%% failure rate for '%s', deprioritizing.",
@@ -200,10 +206,62 @@ class Router:
                 scored.append((llm, self._compute_score(task_type, llm)))
 
         if not scored:
-            return None  # not enough data, use default routing
+            return None
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[0][0]
+
+    # ------------------------------------------------------------------
+    # Complexity-tier routing
+    # ------------------------------------------------------------------
+
+    def _get_tier_candidates(self, complexity: TaskComplexity) -> list[str]:
+        """Return LLM candidates for a given complexity tier."""
+        tier_key = complexity.value  # "low", "medium", "high"
+        return MODEL_TIERS.get(tier_key, [])
+
+    # ------------------------------------------------------------------
+    # Fallback chain
+    # ------------------------------------------------------------------
+
+    def get_fallback_chain(self, task: Task) -> list[str]:
+        """Return the full fallback chain for a task, filtered by availability.
+
+        Order: complexity-tier preferred LLMs first, then the task-type chain,
+        deduplicated while preserving order.
+        """
+        seen: set[str] = set()
+        chain: list[str] = []
+
+        # 1) Complexity-tier candidates
+        tier_candidates = self._get_tier_candidates(task.complexity)
+        for name in tier_candidates:
+            if name not in seen and self._is_usable(name):
+                chain.append(name)
+                seen.add(name)
+
+        # 2) Task-type fallback chain
+        type_chain = FALLBACK_CHAINS.get(task.type, [])
+        for name in type_chain:
+            if name not in seen and self._is_usable(name):
+                chain.append(name)
+                seen.add(name)
+
+        # 3) Static primary/fallback as safety net
+        routing = TASK_TYPES.get(task.type)
+        if routing:
+            for name in [routing.primary, routing.fallback]:
+                if name not in seen and self._is_usable(name):
+                    chain.append(name)
+                    seen.add(name)
+
+        # 4) Any remaining available LLM
+        for name in LLM_CONFIGS:
+            if name not in seen and self._is_usable(name):
+                chain.append(name)
+                seen.add(name)
+
+        return chain
 
     # ------------------------------------------------------------------
     # Core routing
@@ -223,51 +281,85 @@ class Router:
     def route(self, task: Task) -> LLMConfig:
         """Return the best LLM config for the given task.
 
-        First checks adaptive stats for a data-driven choice, then
-        falls back through: primary -> fallback -> any available LLM.
+        Routing priority:
+        1. Adaptive stats (data-driven override)
+        2. Complexity-tier + fallback chain
+        3. Static primary/fallback
+        4. Any available LLM
+
         Raises RuntimeError if no LLM is available at all.
         """
-        # Try adaptive routing first
+        # 1) Try adaptive routing first
         best = self.get_best_llm(task.type)
         if best and self._is_usable(best):
+            self.record_assignment(best)
+            logger.debug(
+                "Adaptive routing: task '%s' (%s, %s) -> %s (session usage: %s)",
+                task.id, task.type, task.complexity.value, best,
+                self._session_usage,
+            )
             return LLM_CONFIGS[best]
 
-        # Default static routing
+        # 2) Complexity-tier + fallback chain — prefer least-used among viable
+        chain = self.get_fallback_chain(task)
+        if chain:
+            # Among the top candidates (primary + first fallback), pick least used
+            top_candidates = [c for c in chain[:2] if self._is_usable(c)]
+            if top_candidates:
+                chosen = self._least_used_llm(top_candidates)
+            else:
+                chosen = chain[0]
+            self.record_assignment(chosen)
+            logger.debug(
+                "Chain routing (balanced): task '%s' (%s) -> %s (chain: %s, usage: %s)",
+                task.id, task.type, chosen, " > ".join(chain),
+                self._session_usage,
+            )
+            return LLM_CONFIGS[chosen]
+
+        # 3) Static routing with load balancing
         routing = TASK_TYPES.get(task.type)
-
         if routing is not None:
-            if self._is_usable(routing.primary):
-                return LLM_CONFIGS[routing.primary]
-            if self._is_usable(routing.fallback):
-                return LLM_CONFIGS[routing.fallback]
+            candidates = [n for n in [routing.primary, routing.fallback] if self._is_usable(n)]
+            if candidates:
+                chosen = self._least_used_llm(candidates)
+                self.record_assignment(chosen)
+                return LLM_CONFIGS[chosen]
 
-        # Last resort: pick any available LLM
-        for name, cfg in LLM_CONFIGS.items():
-            if self._is_usable(name):
-                return cfg
+        # 4) Last resort: least-used available LLM
+        available = [name for name in LLM_CONFIGS if self._is_usable(name)]
+        if available:
+            chosen = self._least_used_llm(available)
+            self.record_assignment(chosen)
+            return LLM_CONFIGS[chosen]
 
         raise RuntimeError(
             f"Nenhum LLM disponivel para a tarefa '{task.id}' (tipo: {task.type}). "
             "Verifique se as chaves de API estao configuradas no ambiente."
         )
 
-    def get_fallback(self, task: Task) -> LLMConfig | None:
-        """Return the fallback LLM for a task, or None if unavailable."""
-        routing = TASK_TYPES.get(task.type)
-        if routing is None:
-            return None
+    def get_fallback(self, task: Task, exclude: str | None = None) -> LLMConfig | None:
+        """Return the next fallback LLM for a task, excluding already-tried LLMs.
 
-        primary = routing.primary
-        fallback_name = routing.fallback
+        Args:
+            task: The task being executed.
+            exclude: LLM name to skip (typically the one that just failed).
+        """
+        chain = self.get_fallback_chain(task)
+        for name in chain:
+            if name != exclude and self._is_usable(name):
+                return LLM_CONFIGS[name]
+        return None
 
-        # Only return fallback if it differs from what was already tried
-        if self._is_usable(fallback_name) and fallback_name != primary:
-            return LLM_CONFIGS[fallback_name]
+    def get_next_in_chain(
+        self, task: Task, tried: set[str]
+    ) -> LLMConfig | None:
+        """Return the next untried LLM from the fallback chain.
 
-        # Try any other available LLM as a last-resort fallback
-        tried = {primary, fallback_name}
-        for name, cfg in LLM_CONFIGS.items():
+        Used for iterating through the full chain on repeated failures.
+        """
+        chain = self.get_fallback_chain(task)
+        for name in chain:
             if name not in tried and self._is_usable(name):
-                return cfg
-
+                return LLM_CONFIGS[name]
         return None

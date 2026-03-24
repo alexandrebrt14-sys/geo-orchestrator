@@ -24,17 +24,30 @@ from .config import (
     TASK_TYPES,
 )
 from .llm_client import LLMClient
-from .models import ExecutionReport, Plan, Task, TaskResult
+from .models import ExecutionReport, Plan, Task, TaskComplexity, TaskResult
 from .pipeline import Pipeline
 from .router import Router
+from .tracer import TraceManager
 
 logger = logging.getLogger(__name__)
 
 # Prompt template for task decomposition
 DECOMPOSE_SYSTEM = """\
 Voce e um gerente de projetos especialista em decompor demandas complexas \
-em tarefas discretas e executaveis. Cada tarefa deve ser atribuida a um tipo \
-da lista abaixo, que determina qual LLM a executara:
+em tarefas discretas e executaveis distribuidas entre 4 LLMs diferentes.
+
+ROTEAMENTO OBRIGATORIO — voce DEVE usar os 4 LLMs distribuindo as tarefas:
+- research / fact_check → Perplexity (pesquisa ao vivo com fontes reais)
+- analysis / data_processing / classification / summarization → Gemini (rapido e barato)
+- writing / copywriting / seo / translation → GPT-4o (melhor texto longo)
+- code / review → Claude (raciocinio complexo e codigo)
+
+REGRA DE EQUILIBRIO OBRIGATORIA:
+- Toda demanda com 4+ tarefas DEVE usar no minimo 3 dos 4 LLMs diferentes.
+- Nunca concentre mais de 40% das tarefas em um unico LLM.
+- SEMPRE inclua pelo menos 1 tarefa de research (usa Perplexity).
+- SEMPRE inclua pelo menos 1 tarefa de analysis ou summarization (usa Gemini).
+- Priorize tarefas paralelas na wave 1 para que os 4 LLMs trabalhem ao mesmo tempo.
 
 Tipos disponiveis: research, analysis, writing, copywriting, code, review, \
 seo, data_processing, fact_check, classification, translation, summarization.
@@ -42,9 +55,14 @@ seo, data_processing, fact_check, classification, translation, summarization.
 Regras:
 1. Cada tarefa tem um id unico (formato: t1, t2, t3...).
 2. Especifique dependencias entre tarefas (lista de ids).
-3. Tarefas sem dependencia rodam em paralelo automaticamente.
+3. Tarefas sem dependencia rodam em paralelo — MAXIMIZE o paralelismo.
 4. Mantenha as descricoes claras e auto-contidas.
 5. Indique o formato esperado de saida (texto, json, lista, codigo, etc).
+6. MINIMIZE DEPENDENCIAS. So adicione se a saida de A e OBRIGATORIA para B. \
+Se podem rodar independentemente, NAO crie dependencia. \
+Quanto mais tarefas paralelas, mais rapida e eficiente a execucao.
+7. Prefira decomposicoes onde a maioria das tarefas NAO tem dependencias (wave 1).
+8. O ideal e que a wave 1 tenha 1 tarefa para cada LLM (4 em paralelo).
 
 Responda APENAS com JSON valido, sem markdown, sem explicacao. Formato:
 
@@ -91,6 +109,12 @@ class Orchestrator:
         Claude analyzes the demand and breaks it into typed tasks with
         dependencies, which are then parsed into a Plan object.
         """
+        tracer = TraceManager.get_instance()
+        decompose_span = tracer.start_span(
+            "orchestrator.decompose",
+            demand=demand[:200],
+        )
+
         client = LLMClient(self._claude_cfg)
 
         response = await client.query(
@@ -102,6 +126,15 @@ class Orchestrator:
         tasks = self._parse_plan(response.text, demand)
         plan = Plan(demand=demand, tasks=tasks)
         plan.total_estimated_cost = response.cost
+
+        tracer.finish_span(
+            decompose_span,
+            status="ok",
+            task_count=len(tasks),
+            task_types=[t.type for t in tasks],
+            decomposition_cost=response.cost,
+        )
+
         return plan
 
     async def execute(self, plan: Plan) -> dict[str, TaskResult]:
@@ -115,31 +148,57 @@ class Orchestrator:
 
         This is the main entry point for end-to-end orchestration.
         """
+        tracer = TraceManager.get_instance()
+        trace = tracer.start_trace(demand=demand)
+        run_span = tracer.start_span("orchestrator.run", demand=demand[:200])
+
         t0 = time.perf_counter_ns()
 
         # Phase 1: Decompose
         plan = await self.decompose(demand)
         original_task_count = len(plan.tasks)
 
+        # Phase 1.5: Estimate complexity for each task
+        self._estimate_complexity(plan.tasks)
+
         # Phase 2: Deduplicate similar tasks
+        dedup_span = tracer.start_span(
+            "orchestrator.deduplicate",
+            before_count=original_task_count,
+        )
         plan.tasks = self._deduplicate(plan.tasks)
         self._dedup_count = original_task_count - len(plan.tasks)
+        tracer.finish_span(
+            dedup_span,
+            status="ok",
+            after_count=len(plan.tasks),
+            merged=self._dedup_count,
+        )
         if self._dedup_count > 0:
             logger.info(
                 "Deduplication: merged %d redundant tasks (%d -> %d).",
                 self._dedup_count, original_task_count, len(plan.tasks),
             )
 
+        # Phase 2.5: Validate LLM balance — ensure all 4 are used
+        self._validate_balance(plan.tasks)
+
         # Phase 3: Check cache for already-computed results
         cached_results: dict[str, TaskResult] = {}
         tasks_to_run: list[Task] = []
         for task in plan.tasks:
+            cache_span = tracer.start_span("cache.check", task_id=task.id)
             cached = self._check_cache(task)
             if cached is not None:
                 cached_results[task.id] = cached
                 self._cache_hits += 1
+                tracer.finish_span(cache_span, status="ok", hit=True)
+                # Separate cache.hit span for visibility
+                hit_span = tracer.start_span("cache.hit", task_id=task.id)
+                tracer.finish_span(hit_span, status="ok")
                 logger.info("Cache hit for task '%s', skipping execution.", task.id)
             else:
+                tracer.finish_span(cache_span, status="ok", hit=False)
                 tasks_to_run.append(task)
 
         # Phase 4: Budget guard
@@ -150,6 +209,9 @@ class Orchestrator:
                 "Use --force to override.",
                 estimated_cost, BUDGET_LIMIT,
             )
+            run_span.set_error(BudgetExceededError("budget exceeded"))
+            tracer.finish_span(run_span)
+            tracer.finish_trace(trace)
             raise BudgetExceededError(
                 f"Custo estimado (US$ {estimated_cost:.4f}) excede o limite "
                 f"(US$ {BUDGET_LIMIT:.4f}). Use --force para ignorar."
@@ -225,7 +287,147 @@ class Orchestrator:
             summary=summary,
         )
 
+        # Finish tracing
+        tracer.finish_span(
+            run_span,
+            status="ok",
+            total_cost=total_cost,
+            total_duration_ms=total_duration_ms,
+            tasks_completed=completed,
+            tasks_failed=failed,
+            tasks_cached=cached_count,
+        )
+        tracer.finish_trace(trace)
+
         return report
+
+    # ==================================================================
+    # Complexity estimation
+    # ==================================================================
+
+    # Task types that are inherently complex (premium tier)
+    _HIGH_COMPLEXITY_TYPES = {"code", "review", "architecture"}
+    # Task types that are inherently simple (cheap tier)
+    _LOW_COMPLEXITY_TYPES = {"classification", "summarization", "translation", "data_processing"}
+
+    # Description length thresholds for complexity estimation
+    _SHORT_DESC_THRESHOLD = 100   # chars — likely a simple task
+    _LONG_DESC_THRESHOLD = 500    # chars — likely a complex task
+
+    def _estimate_complexity(self, tasks: list[Task]) -> None:
+        """Classify each task as low/medium/high complexity.
+
+        Heuristics:
+        1. Task type: some types are inherently cheap or expensive.
+        2. Description length: longer descriptions = more complex requirements.
+        3. Dependency count: tasks with many deps tend to be synthesis/integration tasks.
+
+        Mutates tasks in-place by setting task.complexity.
+        """
+        for task in tasks:
+            # Start with type-based classification
+            if task.type in self._HIGH_COMPLEXITY_TYPES:
+                task.complexity = TaskComplexity.HIGH
+            elif task.type in self._LOW_COMPLEXITY_TYPES:
+                task.complexity = TaskComplexity.LOW
+            else:
+                # Default to medium, then adjust based on description
+                task.complexity = TaskComplexity.MEDIUM
+
+            # Override based on description length (stronger signal)
+            desc_len = len(task.description)
+            if desc_len <= self._SHORT_DESC_THRESHOLD and task.complexity != TaskComplexity.HIGH:
+                task.complexity = TaskComplexity.LOW
+            elif desc_len >= self._LONG_DESC_THRESHOLD and task.complexity != TaskComplexity.LOW:
+                task.complexity = TaskComplexity.HIGH
+
+            # Boost complexity if task depends on 3+ other tasks (integration task)
+            if len(task.dependencies) >= 3:
+                if task.complexity == TaskComplexity.LOW:
+                    task.complexity = TaskComplexity.MEDIUM
+                elif task.complexity == TaskComplexity.MEDIUM:
+                    task.complexity = TaskComplexity.HIGH
+
+            logger.debug(
+                "Complexity: task '%s' (%s, %d chars, %d deps) -> %s",
+                task.id, task.type, desc_len, len(task.dependencies),
+                task.complexity.value,
+            )
+
+    # ==================================================================
+    # LLM balance validation
+    # ==================================================================
+
+    def _validate_balance(self, tasks: list[Task]) -> None:
+        """Ensure tasks are distributed across multiple LLMs, not concentrated.
+
+        If balance is poor (>40% on one LLM), inject missing types to force
+        usage of underrepresented LLMs.
+        """
+        if len(tasks) < 4:
+            return  # Too few tasks to enforce balance
+
+        # Count tasks per target LLM based on TASK_TYPES routing
+        llm_counts: dict[str, int] = {"claude": 0, "gpt4o": 0, "gemini": 0, "perplexity": 0}
+        type_to_llm = {
+            "research": "perplexity", "fact_check": "perplexity",
+            "analysis": "gemini", "data_processing": "gemini",
+            "classification": "gemini", "summarization": "gemini",
+            "writing": "gpt4o", "copywriting": "gpt4o",
+            "seo": "gpt4o", "translation": "gpt4o",
+            "code": "claude", "review": "claude",
+        }
+        for t in tasks:
+            llm = type_to_llm.get(t.type, "claude")
+            llm_counts[llm] = llm_counts.get(llm, 0) + 1
+
+        total = len(tasks)
+        used_llms = sum(1 for c in llm_counts.values() if c > 0)
+        missing_llms = [name for name, c in llm_counts.items() if c == 0]
+
+        logger.info(
+            "LLM balance: %s (used: %d/4, total tasks: %d)",
+            {k: v for k, v in llm_counts.items() if v > 0}, used_llms, total,
+        )
+
+        # Inject tasks for missing LLMs
+        next_id = max((int(t.id.replace("t", "")) for t in tasks if t.id.startswith("t")), default=0) + 1
+        for llm_name in missing_llms:
+            if llm_name == "perplexity":
+                inject_type = "research"
+                inject_desc = "Pesquisar contexto e dados atualizados relevantes para a demanda, com fontes verificaveis."
+            elif llm_name == "gemini":
+                inject_type = "summarization"
+                inject_desc = "Sintetizar e estruturar os dados coletados em formato organizado para uso nas proximas etapas."
+            elif llm_name == "gpt4o":
+                inject_type = "writing"
+                inject_desc = "Redigir um resumo executivo claro e profissional com os principais pontos da analise."
+            else:  # claude
+                inject_type = "review"
+                inject_desc = "Revisar criticamente os resultados das demais tarefas, identificando gaps e inconsistencias."
+
+            new_task = Task(
+                id=f"t{next_id}",
+                type=inject_type,
+                description=inject_desc,
+                dependencies=[],
+                expected_output="texto estruturado",
+            )
+            tasks.append(new_task)
+            next_id += 1
+            logger.info(
+                "Balance injection: added task '%s' (%s) to use %s.",
+                new_task.id, inject_type, llm_name,
+            )
+
+        # Check concentration (>40% on one LLM)
+        for llm_name, count in llm_counts.items():
+            if total > 0 and count / total > 0.4:
+                logger.warning(
+                    "LLM concentration warning: %s has %d/%d tasks (%.0f%%). "
+                    "Consider redistributing.",
+                    llm_name, count, total, count / total * 100,
+                )
 
     # ==================================================================
     # Task deduplication
