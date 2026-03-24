@@ -85,7 +85,7 @@ Demanda --> Orchestrator (Claude decompooe) --> Router (score adaptativo)
 |----------|--------------------:|---------------------|
 | Anthropic | 0.50 | `FINOPS_LIMIT_ANTHROPIC` |
 | OpenAI | 0.50 | `FINOPS_LIMIT_OPENAI` |
-| Google | 0.00 (free tier) | `FINOPS_LIMIT_GOOGLE` |
+| Google | 0.50 (billing ativo) | `FINOPS_LIMIT_GOOGLE` |
 | Perplexity | 0.50 | `FINOPS_LIMIT_PERPLEXITY` |
 | **Global** | **1.50** | `FINOPS_LIMIT_GLOBAL` |
 

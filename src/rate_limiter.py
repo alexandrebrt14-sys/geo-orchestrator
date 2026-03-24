@@ -3,8 +3,8 @@
 Ensures each LLM provider stays within its RPM limits, even when
 multiple tasks try to call the same provider simultaneously.
 
-Free tier limits (as of 2026-03):
-- Gemini 2.5 Flash: 10 RPM (very restrictive)
+Provider limits (as of 2026-03):
+- Gemini 2.5 Flash: 30 RPM (billing ativo, R$500 credito)
 - Perplexity Sonar: 20 RPM
 - Anthropic Claude: 60 RPM
 - OpenAI GPT-4o: 60 RPM
@@ -29,11 +29,11 @@ class ProviderLimit:
     burst_size: int = 1  # Max concurrent burst before throttling
 
 
-# Conservative RPM limits per provider (free/low tier)
+# RPM limits per provider (billing ativo em todas as contas)
 PROVIDER_LIMITS: dict[Provider, ProviderLimit] = {
     Provider.ANTHROPIC: ProviderLimit(requests_per_minute=60, burst_size=3),
     Provider.OPENAI: ProviderLimit(requests_per_minute=60, burst_size=3),
-    Provider.GOOGLE: ProviderLimit(requests_per_minute=10, burst_size=1),
+    Provider.GOOGLE: ProviderLimit(requests_per_minute=30, burst_size=3),  # Billing ativo (R$500 credito)
     Provider.PERPLEXITY: ProviderLimit(requests_per_minute=20, burst_size=2),
 }
 
@@ -132,7 +132,7 @@ class RateLimiter:
 
     Usage:
         limiter = RateLimiter()
-        await limiter.acquire(Provider.GOOGLE)  # blocks if Gemini is at 10 RPM
+        await limiter.acquire(Provider.GOOGLE)  # blocks if Gemini is at 30 RPM
         # ... make API call ...
     """
 

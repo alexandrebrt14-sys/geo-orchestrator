@@ -139,7 +139,7 @@ class Pipeline:
             self._save_checkpoint(wave_idx, pending_ids)
 
             # Separate Gemini tasks from others to stagger them
-            # (Gemini free tier = 10 RPM, needs ~6s gaps)
+            # (Gemini billing ativo = 30 RPM, stagger 2s gaps)
             gemini_task_ids: list[str] = []
             parallel_task_ids: list[str] = []
 
@@ -481,7 +481,7 @@ class Pipeline:
     ) -> None:
         """Run Gemini-routed tasks sequentially with staggered gaps.
 
-        Gemini free tier allows 10 RPM = 1 request per 6 seconds.
+        Gemini billing ativo allows 30 RPM = 1 request per 2 seconds.
         The rate limiter handles the actual throttling, but we also
         stagger task launches to avoid queuing up too many requests.
         """

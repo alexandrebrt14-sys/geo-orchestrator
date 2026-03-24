@@ -104,7 +104,7 @@ python cli.py cost-report
 ## FinOps
 
 - Budget limit por execucao: US$ 1.00 (env: GEO_BUDGET_LIMIT)
-- Limites diarios: Anthropic US$ 0.50, OpenAI US$ 0.50, Google US$ 0.00, Perplexity US$ 0.50
+- Limites diarios: Anthropic US$ 0.50, OpenAI US$ 0.50, Google US$ 0.50, Perplexity US$ 0.50
 - Global diario: US$ 1.50
 - Budget guard: bloqueia se estimativa > limite, alert se real > 2x estimativa
 
@@ -112,5 +112,5 @@ python cli.py cost-report
 
 - Anthropic: 60 RPM, burst 3
 - OpenAI: 60 RPM, burst 3
-- Google: 10 RPM, burst 1 (stagger 6s entre requests)
+- Google: 30 RPM, burst 3 (billing ativo, R$500 credito)
 - Perplexity: 20 RPM, burst 2

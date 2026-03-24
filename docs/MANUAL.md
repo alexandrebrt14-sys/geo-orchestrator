@@ -180,7 +180,7 @@ Dentro de cada wave, tarefas nao-Gemini executam via `asyncio.gather()`. Tarefas
 
 ### Gemini stagger
 
-O Gemini free tier permite apenas 10 RPM (1 request a cada 6 segundos). Quando uma wave contem multiplas tarefas Gemini, elas sao executadas sequencialmente com gaps calculados pelo rate limiter:
+O Gemini com billing ativo permite 30 RPM (R$500 credito pago). Quando uma wave contem multiplas tarefas Gemini, elas sao executadas sequencialmente com gaps calculados pelo rate limiter:
 
 ```python
 gemini_interval = limiter.min_interval(Provider.GOOGLE)  # 6.0s
@@ -211,7 +211,7 @@ O bucket comeca cheio ate `burst_size`. Cada request consome 1 token. Tokens sao
 |----------|----:|------:|
 | Anthropic | 60 | 3 |
 | OpenAI | 60 | 3 |
-| Google (Gemini) | 10 | 1 |
+| Google (Gemini) | 30 | 3 |
 | Perplexity | 20 | 2 |
 
 ### Comportamento
@@ -232,7 +232,7 @@ Configurados em `config.py` via variaveis de ambiente:
 FINOPS_DAILY_LIMITS = {
     "anthropic":  0.50,   # FINOPS_LIMIT_ANTHROPIC
     "openai":     0.50,   # FINOPS_LIMIT_OPENAI
-    "google":     0.00,   # FINOPS_LIMIT_GOOGLE (free tier)
+    "google":     0.50,   # FINOPS_LIMIT_GOOGLE (billing ativo)
     "perplexity": 0.50,   # FINOPS_LIMIT_PERPLEXITY
 }
 FINOPS_DAILY_GLOBAL = 1.50   # FINOPS_LIMIT_GLOBAL

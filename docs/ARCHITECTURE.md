@@ -338,4 +338,4 @@ Waves sao mais simples de implementar e depurar. Cada wave e um "nivel" no DAG d
 
 ### Por que stagger para Gemini?
 
-O free tier do Gemini permite 10 RPM. Sem stagger, multiplas tarefas Gemini na mesma wave causariam 429 em sequencia. O stagger garante gap minimo de 6s entre requests Gemini.
+O Gemini com billing ativo permite 30 RPM (R$500 credito pago). Sem stagger, multiplas tarefas Gemini na mesma wave ainda podem causar 429 em rajadas. O stagger garante gap minimo de 2s entre requests Gemini.
