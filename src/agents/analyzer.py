@@ -122,12 +122,34 @@ class AnalyzerAgent(BaseAgent):
                 "parts": [{"text": system_instruction}],
             }
 
+        import asyncio
+
         api_key = os.getenv("GOOGLE_AI_API_KEY", "")
-        response = await self.llm_client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent",
-            params={"key": api_key},
-            json=payload,
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent"
+
+        # Retry com backoff + fallback para modelos alternativos em caso de 429
+        models_to_try = [self.model_name, "gemini-2.5-flash-lite"]
+        max_retries = 2
+        response = None
+
+        for model in models_to_try:
+            model_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            for attempt in range(max_retries):
+                response = await self.llm_client.post(
+                    model_url,
+                    params={"key": api_key},
+                    json=payload,
+                )
+                if response.status_code != 429:
+                    if model != self.model_name:
+                        logger.info(f"Gemini fallback: usando {model} (modelo primario com quota esgotada)")
+                    break
+                wait_time = (attempt + 1) * 5
+                logger.warning(f"Gemini 429 em {model} (tentativa {attempt + 1}/{max_retries}), aguardando {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            if response is not None and response.status_code != 429:
+                break
+
         response.raise_for_status()
         data = response.json()
 
