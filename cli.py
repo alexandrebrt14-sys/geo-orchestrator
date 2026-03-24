@@ -36,6 +36,7 @@ from src.agents.researcher import ResearcherAgent
 from src.agents.writer import WriterAgent, WritingMode
 from src.agents.architect import ArchitectAgent
 from src.agents.analyzer import AnalyzerAgent
+from src.finops import FinOps, get_finops
 from src.templates.decomposition import DECOMPOSITION_PROMPT
 
 load_dotenv()
@@ -82,6 +83,48 @@ MODELS = {
 
 COST_LOG_PATH = Path("output/cost_history.jsonl")
 REPORT_DIR = Path("output")
+
+# Mapeamento tipo de tarefa → modelo + provider para narração
+TASK_MODEL_MAP = {
+    "research": ("sonar-pro", "Perplexity", "magenta"),
+    "analysis": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
+    "writing": ("gpt-4o", "OpenAI", "green"),
+    "copywriting": ("gpt-4o", "OpenAI", "green"),
+    "seo": ("gpt-4o", "OpenAI", "green"),
+    "translation": ("gpt-4o", "OpenAI", "green"),
+    "architecture": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
+    "code_generation": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
+    "review": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
+    "data_processing": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
+    "classification": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
+    "summarization": ("gemini-2.0-flash", "Google/Gemini", "yellow"),
+    "fact_check": ("sonar-pro", "Perplexity", "magenta"),
+    "deploy": ("local", "Execução Local", "white"),
+}
+
+
+def _narrate_task(task_def: dict, phase: str = "start") -> None:
+    """Narra qual modelo está executando cada tarefa — sempre visível."""
+    task_type = task_def.get("type", "unknown")
+    model, provider, color = TASK_MODEL_MAP.get(task_type, ("unknown", "Unknown", "white"))
+    task_id = task_def.get("id", "?")
+    title = task_def.get("title", "")
+
+    if phase == "start":
+        console.print(
+            f"  [{color}][{provider}/{model}][/{color}] "
+            f"[bold]{task_id}[/bold]: {title}"
+        )
+    elif phase == "done":
+        console.print(
+            f"  [{color}][{provider}/{model}][/{color}] "
+            f"[bold]{task_id}[/bold]: [green]concluída[/green]"
+        )
+    elif phase == "fail":
+        console.print(
+            f"  [{color}][{provider}/{model}][/{color}] "
+            f"[bold]{task_id}[/bold]: [red]falhou[/red]"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -224,15 +267,16 @@ async def _execute_plan(plan: dict, verbose: bool = False, output_dir: Path = RE
                 task_type = task_def["type"]
                 task_id = task_def["id"]
 
+                # Narrar qual modelo executa — sempre visível
+                _narrate_task(task_def, "start")
+
                 # Montar contexto das dependências
                 dep_results = [results[dep_id] for dep_id in task_def.get("dependencies", []) if dep_id in results]
                 context = format_context_from_results(dep_results)
 
-                if verbose:
-                    console.print(f"  [dim]Executando {task_id}: {task_def['title']}...[/dim]")
-
                 # Pular tarefas do tipo deploy (execução local)
                 if task_type == "deploy":
+                    _narrate_task(task_def, "done")
                     return TaskResult(
                         task_id=task_id,
                         task_type=TaskType.DEPLOY,
@@ -271,12 +315,14 @@ async def _execute_plan(plan: dict, verbose: bool = False, output_dir: Path = RE
                 all_results.append(result)
                 progress.advance(pg_task)
 
-                if verbose:
-                    status = "[green]OK[/green]" if result.success else f"[red]FALHA: {result.error}[/red]"
-                    console.print(
-                        f"  {task_def['id']}: {status} "
-                        f"({result.duration_seconds}s, US$ {result.cost_usd:.4f})"
-                    )
+                # Sempre narrar resultado por modelo
+                _narrate_task(task_def, "done" if result.success else "fail")
+                model_info = TASK_MODEL_MAP.get(task_def["type"], ("?", "?", "white"))
+                console.print(
+                    f"    [dim]{result.duration_seconds:.1f}s | "
+                    f"{result.tokens_input}→{result.tokens_output} tokens | "
+                    f"US$ {result.cost_usd:.4f}[/dim]"
+                )
 
     return all_results
 
@@ -409,8 +455,21 @@ def run(demand: str, dry_run: bool, verbose: bool, output_dir: str):
         border_style="blue",
     ))
 
+    # Mostrar a banca de modelos disponíveis
+    banca = Table(title="Banca de Modelos", show_lines=False, box=None)
+    banca.add_column("Papel", style="bold")
+    banca.add_column("Modelo", style="cyan")
+    banca.add_column("Provider")
+    banca.add_column("Status")
+    banca.add_row("Pesquisador", "sonar-pro", "Perplexity", "[green]ativo[/green]" if _check_api_key("PERPLEXITY_API_KEY") else "[red]sem chave[/red]")
+    banca.add_row("Redator", "gpt-4o", "OpenAI", "[green]ativo[/green]" if _check_api_key("OPENAI_API_KEY") else "[red]sem chave[/red]")
+    banca.add_row("Arquiteto", "claude-opus-4-6", "Anthropic", "[green]ativo[/green]" if _check_api_key("ANTHROPIC_API_KEY") else "[red]sem chave[/red]")
+    banca.add_row("Analista", "gemini-2.0-flash", "Google", "[green]ativo[/green]" if _check_api_key("GOOGLE_API_KEY") else "[red]sem chave[/red]")
+    console.print(banca)
+    console.print()
+
     # Fase 1: Decomposição
-    console.print("\n[bold cyan]Fase 1: Decompondo demanda...[/bold cyan]")
+    console.print("[bold cyan]Fase 1:[/bold cyan] [blue][Anthropic/Claude][/blue] Decompondo demanda em tarefas...\n")
     plan = asyncio.run(_decompose_demand(demand))
     _display_plan(plan)
 
@@ -419,7 +478,7 @@ def run(demand: str, dry_run: bool, verbose: bool, output_dir: str):
         return
 
     # Fase 2: Execução
-    console.print("[bold cyan]Fase 2: Executando tarefas...[/bold cyan]\n")
+    console.print("[bold cyan]Fase 2:[/bold cyan] Executando tarefas com roteamento por modelo...\n")
     results = asyncio.run(_execute_plan(plan, verbose=verbose, output_dir=Path(output_dir)))
 
     # Fase 3: Relatório
@@ -538,6 +597,179 @@ def models():
         )
 
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Comandos FinOps
+# ---------------------------------------------------------------------------
+@cli.group()
+def finops():
+    """Governanca FinOps — limites diarios, gastos e relatorios."""
+    pass
+
+
+@finops.command(name="status")
+def finops_status():
+    """Mostra gasto diario atual por provider."""
+    fo = get_finops()
+    status_data = fo.daily_status()
+
+    table = Table(title="FinOps — Gasto Diario")
+    table.add_column("Provider", style="cyan")
+    table.add_column("Gasto (US$)", justify="right")
+    table.add_column("Limite (US$)", justify="right")
+    table.add_column("Restante (US$)", justify="right")
+    table.add_column("Uso (%)", justify="right")
+    table.add_column("Status")
+
+    for provider, data in sorted(status_data.items()):
+        if provider.startswith("_"):
+            continue
+        pct = data["usage_pct"]
+        if pct >= 95:
+            status_str = "[red]BLOQUEADO[/red]"
+        elif pct >= 80:
+            status_str = "[yellow]ALERTA[/yellow]"
+        else:
+            status_str = "[green]OK[/green]"
+        table.add_row(
+            provider,
+            f"{data['spent']:.4f}",
+            f"{data['limit']:.2f}",
+            f"{data['remaining']:.4f}",
+            f"{pct:.1f}%",
+            status_str,
+        )
+
+    # Global row
+    g = status_data.get("_global", {})
+    table.add_section()
+    g_pct = g.get("usage_pct", 0)
+    if g_pct >= 95:
+        g_status = "[red]BLOQUEADO[/red]"
+    elif g_pct >= 80:
+        g_status = "[yellow]ALERTA[/yellow]"
+    else:
+        g_status = "[green]OK[/green]"
+    table.add_row(
+        "[bold]GLOBAL[/bold]",
+        f"[bold]{g.get('spent', 0):.4f}[/bold]",
+        f"[bold]{g.get('limit', 0):.2f}[/bold]",
+        f"[bold]{g.get('remaining', 0):.4f}[/bold]",
+        f"[bold]{g_pct:.1f}%[/bold]",
+        g_status,
+    )
+
+    console.print(table)
+
+
+@finops.command(name="reset")
+def finops_reset():
+    """Reseta contadores diarios de gasto."""
+    fo = get_finops()
+    fo.reset_daily()
+    console.print("[green]Contadores diarios resetados com sucesso.[/green]")
+
+
+@finops.command(name="report")
+def finops_report():
+    """Gera relatorio Markdown da ultima sessao."""
+    fo = get_finops()
+    report = fo.session_report()
+
+    # Save to file
+    report_dir = Path("output")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = report_dir / f"finops_report_{timestamp}.md"
+    report_path.write_text(report, encoding="utf-8")
+
+    console.print(Panel(report, title="Relatorio FinOps", border_style="cyan"))
+    console.print(f"\nRelatorio salvo em: [cyan]{report_path}[/cyan]")
+
+
+# ---------------------------------------------------------------------------
+# Comandos de Trace (Observability)
+# ---------------------------------------------------------------------------
+@cli.group()
+def trace():
+    """Distributed tracing — visualizar execucoes passadas."""
+    pass
+
+
+@trace.command(name="list")
+@click.option("--limit", default=20, help="Numero maximo de traces a listar.")
+def trace_list(limit: int):
+    """Lista traces recentes salvos em output/.traces/."""
+    from src.tracer import list_traces
+
+    traces = list_traces(limit=limit)
+
+    if not traces:
+        console.print("[yellow]Nenhum trace encontrado em output/.traces/[/yellow]")
+        return
+
+    table = Table(title="Traces Recentes")
+    table.add_column("Trace ID", style="cyan")
+    table.add_column("Demanda")
+    table.add_column("Inicio")
+    table.add_column("Duracao", justify="right")
+    table.add_column("Custo (US$)", justify="right")
+    table.add_column("Spans", justify="right")
+
+    for t in traces:
+        started = t["started_at"][:19] if t["started_at"] else "?"
+        duration_s = t["total_duration_ms"] / 1000
+        table.add_row(
+            t["trace_id"],
+            t["demand"][:50] + ("..." if len(t["demand"]) > 50 else ""),
+            started,
+            f"{duration_s:.1f}s",
+            f"{t['total_cost']:.4f}",
+            str(t["span_count"]),
+        )
+
+    console.print(table)
+    console.print(f"\n{len(traces)} trace(s) encontrado(s).")
+
+
+@trace.command(name="show")
+@click.argument("trace_id")
+def trace_show(trace_id: str):
+    """Mostra timeline e resumo de um trace especifico."""
+    from src.tracer import load_trace, export_timeline, export_summary
+
+    t = load_trace(trace_id)
+    if t is None:
+        console.print(f"[red]Trace '{trace_id}' nao encontrado.[/red]")
+        return
+
+    # Timeline
+    timeline = export_timeline(t)
+    console.print(Panel(timeline, title="Timeline", border_style="cyan"))
+
+    # Summary
+    summary = export_summary(t)
+    console.print(Panel(summary, title="Resumo", border_style="green"))
+
+
+@trace.command(name="last")
+def trace_last():
+    """Mostra o trace mais recente."""
+    from src.tracer import load_latest_trace, export_timeline, export_summary
+
+    t = load_latest_trace()
+    if t is None:
+        console.print("[yellow]Nenhum trace encontrado em output/.traces/[/yellow]")
+        return
+
+    # Timeline
+    timeline = export_timeline(t)
+    console.print(Panel(timeline, title=f"Timeline — {t.trace_id}", border_style="cyan"))
+
+    # Summary
+    summary = export_summary(t)
+    console.print(Panel(summary, title="Resumo", border_style="green"))
 
 
 if __name__ == "__main__":
