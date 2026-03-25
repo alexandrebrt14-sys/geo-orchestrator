@@ -33,6 +33,8 @@ src/
     architect.py                # Claude Opus
     analyzer.py                 # Gemini Flash
     groq_agent.py               # Groq Llama 3.3 70B (round 2)
+  circuit_breaker.py              # Circuit breaker por provider: CLOSED/OPEN/HALF_OPEN (round 3)
+  performance_router.py           # Router com historico de performance e scoring adaptativo (round 3)
   templates/
     decomposition.py            # Prompt de decomposicao (legacy, usado pelo CLI antigo)
     agent_prompts.py            # System prompts por tipo de agente
