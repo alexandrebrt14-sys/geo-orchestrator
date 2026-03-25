@@ -324,9 +324,12 @@ class LLMClient:
         api_key = self.config.api_key or ""
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
-            f":generateContent?key={api_key}"
+            f":generateContent"
         )
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
 
         contents: list[dict] = []
         if system:

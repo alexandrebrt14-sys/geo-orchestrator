@@ -131,13 +131,14 @@ class AnalyzerAgent(BaseAgent):
         models_to_try = [self.model_name, "gemini-2.5-flash-lite"]
         max_retries = 2
         response = None
+        headers = {"x-goog-api-key": api_key}
 
         for model in models_to_try:
             model_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             for attempt in range(max_retries):
                 response = await self.llm_client.post(
                     model_url,
-                    params={"key": api_key},
+                    headers=headers,
                     json=payload,
                 )
                 if response.status_code != 429:
