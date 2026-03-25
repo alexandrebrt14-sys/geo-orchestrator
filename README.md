@@ -1,6 +1,6 @@
 # geo-orchestrator
 
-**5 LLMs** | **7.471 linhas** | **72 arquivos** | **14 commits** | **3 rodadas de melhoria multi-LLM**
+**5 LLMs** | **8.100+ linhas** | **72+ arquivos** | **21 commits** | **6 rodadas de melhoria multi-LLM**
 
 ---
 
@@ -12,15 +12,26 @@ O sistema inclui governanca FinOps completa com limites diarios por provider, bu
 
 ---
 
-## 3 rodadas de melhoria com 5 LLMs
+## 6 rodadas de melhoria com 5 LLMs
 
-O geo-orchestrator passou por 3 rodadas de auto-aprimoramento executadas por uma banca de 5 LLMs, com custo total de **US$ 0.045**.
+O geo-orchestrator passou por 6 rodadas de aprimoramento executadas por uma banca de 5 LLMs.
 
 | Rodada | Foco | Principais entregas |
 |--------|------|---------------------|
 | **Round 1** | Fundacao | Orquestrador, pipeline, router adaptativo, 4 agentes, CLI, cache SHA-256, checkpoints, quality gates, budget guard |
 | **Round 2** | Resiliencia e observabilidade | FinOps com limites diarios, rate limiter token bucket, tracing com spans, connection pool, cost tracker, context pipeline, feedback loop |
 | **Round 3** | Inteligencia avancada | Circuit breaker, dashboard de metricas, token budget allocator, memoria de agentes, session load balancer, task re-prioritization, complexity scoring |
+| **Round 4** | Web showcase | Pagina de showcase gerada pelos 5 LLMs, deploy automatico |
+| **Round 5** | Security hardening | API keys via headers (nao URL params), git filter-repo para limpar historico, .gitignore em todos os repos, rotacao de todas as chaves |
+| **Round 6** | MARL (Multi-Agent RL) | Analise baseada em Foerster/Jaques/Albrecht. 12 tarefas, 7 grupos, 5 LLMs, US$ 2.68. Propostas: comunicacao inter-agente, feedback colaborativo, balanceador adaptativo |
+
+## Seguranca
+
+- API keys **nunca em URLs** — Google API key via header `x-goog-api-key`
+- Todos os secrets via variaveis de ambiente (`.env` no `.gitignore`)
+- Diretorio `output/` excluido do git (contem logs com dados sensiveis)
+- Historico git limpo com `git filter-repo` apos incidente GitGuardian
+- Modulo de auditoria: `papers/src/finops/secrets.py` com scan de leaks
 
 ---
 
