@@ -68,6 +68,91 @@ class Pipeline:
         self._checkpoint_path = OUTPUT_DIR / ".checkpoint.json"
         self._results_dir.mkdir(parents=True, exist_ok=True)
 
+        # Estatísticas por LLM para exibição em tempo real
+        self._llm_stats: dict[str, dict] = {
+            name: {"assigned": 0, "completed": 0, "tokens": 0, "cost": 0.0, "status": "idle"}
+            for name in ["claude", "gpt4o", "gemini", "perplexity", "groq"]
+        }
+
+    # ==================================================================
+    # Status em tempo real
+    # ==================================================================
+
+    def _print_status(self) -> None:
+        """Imprime tabela de status dos LLMs em tempo real."""
+        col_llm = 12
+        col_tarefas = 7
+        col_comp = 9
+        col_tokens = 6
+        col_custo = 7
+        col_status = 6
+
+        def fmt_tokens(n: int) -> str:
+            if n >= 1000:
+                return f"{n / 1000:.1f}k"
+            return str(n)
+
+        def fmt_bar(completed: int, assigned: int, width: int = 4) -> str:
+            if assigned == 0:
+                return "░" * width
+            filled = round(completed / assigned * width)
+            return "█" * filled + "░" * (width - filled)
+
+        sep_top    = "┌" + "─" * (col_llm + 2) + "┬" + "─" * (col_tarefas + 2) + "┬" + "─" * (col_comp + 2) + "┬" + "─" * (col_tokens + 2) + "┬" + "─" * (col_custo + 2) + "┬" + "─" * (col_status + 2) + "┐"
+        sep_header = "├" + "─" * (col_llm + 2) + "┼" + "─" * (col_tarefas + 2) + "┼" + "─" * (col_comp + 2) + "┼" + "─" * (col_tokens + 2) + "┼" + "─" * (col_custo + 2) + "┼" + "─" * (col_status + 2) + "┤"
+        sep_bot    = "└" + "─" * (col_llm + 2) + "┴" + "─" * (col_tarefas + 2) + "┴" + "─" * (col_comp + 2) + "┴" + "─" * (col_tokens + 2) + "┴" + "─" * (col_custo + 2) + "┴" + "─" * (col_status + 2) + "┘"
+
+        title = " Status dos LLMs "
+        total_width = len(sep_top) - 2
+        title_padded = title.center(total_width, "─")
+        title_line = "┌" + title_padded + "┐"
+
+        header = (
+            "│ "
+            + "LLM".ljust(col_llm)
+            + " │ "
+            + "Tarefas".center(col_tarefas)
+            + " │ "
+            + "Completas".center(col_comp)
+            + " │ "
+            + "Tokens".center(col_tokens)
+            + " │ "
+            + "Custo".center(col_custo)
+            + " │ "
+            + "Status".center(col_status)
+            + " │"
+        )
+
+        print(title_line)
+        print(header)
+        print(sep_header)
+
+        for name, stats in self._llm_stats.items():
+            assigned  = stats["assigned"]
+            completed = stats["completed"]
+            tokens    = stats["tokens"]
+            cost      = stats["cost"]
+            bar       = fmt_bar(completed, assigned)
+
+            row = (
+                "│ "
+                + name.ljust(col_llm)
+                + " │ "
+                + str(assigned).center(col_tarefas)
+                + " │ "
+                + str(completed).center(col_comp)
+                + " │ "
+                + fmt_tokens(tokens).center(col_tokens)
+                + " │ "
+                + f"${cost:.3f}".center(col_custo)
+                + " │ "
+                + bar.center(col_status)
+                + " │"
+            )
+            print(row)
+
+        print(sep_bot)
+
     # ==================================================================
     # Main execution
     # ==================================================================
@@ -92,7 +177,7 @@ class Pipeline:
         llm_names = []
         for task in self.plan.tasks:
             try:
-                cfg = self.router.route(task)
+                cfg = self.router.force_all_models_route(task)
                 llm_names.append(cfg.name)
             except RuntimeError:
                 pass
@@ -134,6 +219,16 @@ class Pipeline:
                 len(pending_ids),
                 ", ".join(f"{self._task_map[tid].type}" for tid in pending_ids),
             )
+            # Bridge status: report model usage between waves
+            logger.info(
+                "Status dos modelos:\n%s", self.router.get_model_status_table()
+            )
+            unused = self.router.get_unused_models()
+            if unused:
+                logger.info(
+                    "BRIDGE: %d modelos ainda nao usados: %s — priorizando.",
+                    len(unused), ", ".join(unused),
+                )
 
             # Save checkpoint before wave execution
             self._save_checkpoint(wave_idx, pending_ids)
@@ -186,6 +281,9 @@ class Pipeline:
 
             # Finish wave span
             tracer.finish_span(wave_span, duration_ms=wave_duration_ms)
+
+            # Exibe status dos LLMs ao final de cada wave
+            self._print_status()
 
         # Clean up checkpoint on successful completion
         self._clear_checkpoint()
@@ -571,6 +669,13 @@ class Pipeline:
 
             tried.add(next_cfg.name)
             chain_log.append(next_cfg.name)
+
+            # Atualiza estatísticas: tarefa iniciada neste LLM
+            llm_key = next_cfg.name
+            if llm_key in self._llm_stats:
+                self._llm_stats[llm_key]["assigned"] += 1
+                self._llm_stats[llm_key]["status"] = "running"
+
             attempt_result = await self._call_llm(task, next_cfg, prompt)
             attempt_result.wave_index = wave_index
             attempt_result.start_time_ms = start_time_ms - self._execution_start_ms
@@ -580,6 +685,13 @@ class Pipeline:
                     task.type, next_cfg.name, True,
                     attempt_result.duration_ms, attempt_result.cost,
                 )
+
+                # Atualiza estatísticas: tarefa concluída com sucesso
+                if llm_key in self._llm_stats:
+                    self._llm_stats[llm_key]["completed"] += 1
+                    self._llm_stats[llm_key]["tokens"] += attempt_result.tokens_used or 0
+                    self._llm_stats[llm_key]["cost"] += attempt_result.cost or 0.0
+                    self._llm_stats[llm_key]["status"] = "done"
 
                 # Early termination: quality gate passes -> done
                 if self._quality_check(task, attempt_result):

@@ -43,11 +43,13 @@ ROTEAMENTO OBRIGATÓRIO — você DEVE usar os 5 LLMs:
 - code / review / architecture → Claude Opus (raciocínio profundo)
 - classification / summarization / translation → Groq Llama 3.3 70B (ultra-rápido)
 
-REGRAS DE EQUILÍBRIO (baseadas em Albrecht 2023, MARL coexistence):
-- Toda demanda com 5+ tarefas DEVE usar no mínimo 4 dos 5 LLMs.
+REGRAS DE EQUILÍBRIO (OBRIGATÓRIO — bridge force-all-models):
+- TODOS os 5 LLMs DEVEM ser usados em TODA execução, sem exceção.
+- Mínimo absoluto: 5 tarefas (1 por LLM). Se a demanda é simples, crie subtarefas auxiliares.
 - Nunca concentre mais de 35% das tarefas em um único LLM.
-- SEMPRE inclua pelo menos 1 tarefa para Perplexity, 1 para Gemini, 1 para Groq.
-- Wave 1 deve ter 1 tarefa por LLM (5 em paralelo) quando possível.
+- Wave 1 DEVE ter exatamente 5 tarefas paralelas (1 por LLM).
+- Se sobram tarefas, distribua round-robin entre os 5 LLMs.
+- O router faz enforcement automático via force_all_models_route().
 
 REGRAS DE ECONOMIA DE TOKENS (FinOps):
 - Tarefas de classificação e triagem: use Groq (custo 10x menor que Claude).
@@ -308,6 +310,22 @@ class Orchestrator:
             summary=summary,
         )
 
+        # Bridge final status: report model usage
+        usage = self._router.get_session_usage()
+        all_used = all(v > 0 for v in usage.values() if LLM_CONFIGS.get(next((k for k, val in usage.items() if val == v), ""), None) and LLM_CONFIGS[next((k for k, val in usage.items() if val == v), "")].available)
+        logger.info("=" * 50)
+        logger.info("BRIDGE — Uso final dos modelos:")
+        logger.info("\n%s", self._router.get_model_status_table())
+        unused = self._router.get_unused_models()
+        if unused:
+            logger.warning(
+                "BRIDGE ALERTA: %d modelos nao foram usados: %s",
+                len(unused), ", ".join(unused),
+            )
+        else:
+            logger.info("BRIDGE OK: Todos os 5 modelos foram utilizados na execucao.")
+        logger.info("=" * 50)
+
         # Finish tracing
         tracer.finish_span(
             run_span,
@@ -317,6 +335,7 @@ class Orchestrator:
             tasks_completed=completed,
             tasks_failed=failed,
             tasks_cached=cached_count,
+            bridge_usage=usage,
         )
         tracer.finish_trace(trace)
 
@@ -385,18 +404,18 @@ class Orchestrator:
         If balance is poor (>40% on one LLM), inject missing types to force
         usage of underrepresented LLMs.
         """
-        if len(tasks) < 4:
+        if len(tasks) < 3:
             return  # Too few tasks to enforce balance
 
         # Count tasks per target LLM based on TASK_TYPES routing
-        llm_counts: dict[str, int] = {"claude": 0, "gpt4o": 0, "gemini": 0, "perplexity": 0}
+        llm_counts: dict[str, int] = {"claude": 0, "gpt4o": 0, "gemini": 0, "perplexity": 0, "groq": 0}
         type_to_llm = {
             "research": "perplexity", "fact_check": "perplexity",
             "analysis": "gemini", "data_processing": "gemini",
-            "classification": "gemini", "summarization": "gemini",
             "writing": "gpt4o", "copywriting": "gpt4o",
-            "seo": "gpt4o", "translation": "gpt4o",
+            "seo": "gpt4o", "translation": "groq",
             "code": "claude", "review": "claude",
+            "classification": "groq", "summarization": "groq",
         }
         for t in tasks:
             llm = type_to_llm.get(t.type, "claude")
@@ -407,7 +426,7 @@ class Orchestrator:
         missing_llms = [name for name, c in llm_counts.items() if c == 0]
 
         logger.info(
-            "LLM balance: %s (used: %d/4, total tasks: %d)",
+            "LLM balance: %s (used: %d/5, total tasks: %d)",
             {k: v for k, v in llm_counts.items() if v > 0}, used_llms, total,
         )
 
@@ -423,6 +442,9 @@ class Orchestrator:
             elif llm_name == "gpt4o":
                 inject_type = "writing"
                 inject_desc = "Redigir um resumo executivo claro e profissional com os principais pontos da analise."
+            elif llm_name == "groq":
+                inject_type = "classification"
+                inject_desc = "Classificar e priorizar os resultados das demais tarefas por relevancia e impacto, gerando ranking ordenado."
             else:  # claude
                 inject_type = "review"
                 inject_desc = "Revisar criticamente os resultados das demais tarefas, identificando gaps e inconsistencias."
@@ -441,9 +463,9 @@ class Orchestrator:
                 new_task.id, inject_type, llm_name,
             )
 
-        # Check concentration (>40% on one LLM)
+        # Check concentration (>30% on one LLM)
         for llm_name, count in llm_counts.items():
-            if total > 0 and count / total > 0.4:
+            if total > 0 and count / total > 0.30:
                 logger.warning(
                     "LLM concentration warning: %s has %d/%d tasks (%.0f%%). "
                     "Consider redistributing.",

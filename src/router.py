@@ -62,6 +62,64 @@ class Router:
         """Return task assignment counts for this session."""
         return dict(self._session_usage)
 
+    # ------------------------------------------------------------------
+    # Force-all-models bridge
+    # ------------------------------------------------------------------
+
+    def get_unused_models(self) -> list[str]:
+        """Return LLM names that haven't been used in this session."""
+        return [name for name in LLM_CONFIGS if self._session_usage.get(name, 0) == 0 and self._is_usable(name)]
+
+    def force_all_models_route(self, task: "Task") -> "LLMConfig":
+        """Route a task, but prioritize LLMs that haven't been used yet.
+
+        This ensures all 5 models get at least one task per session.
+        Falls back to normal routing once all models have been used.
+        """
+        unused = self.get_unused_models()
+        if unused:
+            # Among unused models, pick the best fit for this task type
+            routing = TASK_TYPES.get(task.type)
+            # Prefer: unused model that is primary or fallback for this type
+            preferred = []
+            others = []
+            for name in unused:
+                if routing and name in (routing.primary, routing.fallback):
+                    preferred.append(name)
+                else:
+                    others.append(name)
+            chosen = (preferred + others)[0]
+            self.record_assignment(chosen)
+            logger.info(
+                "BRIDGE force-all: task '%s' (%s) -> %s [unused models: %s]",
+                task.id, task.type, chosen, ", ".join(unused),
+            )
+            return LLM_CONFIGS[chosen]
+        # All models used at least once — normal routing
+        return self.route(task)
+
+    def get_model_status_table(self) -> str:
+        """Return a formatted status table of all models and their usage."""
+        lines = []
+        lines.append("┌─────────────┬──────────┬───────────┐")
+        lines.append("│ Modelo      │ Tarefas  │ Status    │")
+        lines.append("├─────────────┼──────────┼───────────┤")
+        for name in LLM_CONFIGS:
+            cfg = LLM_CONFIGS[name]
+            count = self._session_usage.get(name, 0)
+            available = cfg.available
+            if not available:
+                status = "sem chave"
+            elif name in self._rate_limited:
+                status = "rate-limit"
+            elif count > 0:
+                status = "ativo"
+            else:
+                status = "aguardando"
+            lines.append(f"│ {name:<11} │ {count:>6}   │ {status:<9} │")
+        lines.append("└─────────────┴──────────┴───────────┘")
+        return "\n".join(lines)
+
     def _least_used_llm(self, candidates: list[str]) -> str:
         """Among candidates, return the one with fewest assignments this session."""
         return min(candidates, key=lambda n: self._session_usage.get(n, 0))
