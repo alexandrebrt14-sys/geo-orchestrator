@@ -421,6 +421,71 @@ def _display_summary(results: list[TaskResult]) -> None:
     console.print()
     console.print(table)
 
+    # ── Status de uso por modelo (5 LLMs) ──
+    model_stats: dict[str, dict] = {}
+    for r in results:
+        provider = r.agent_name or "unknown"
+        if provider not in model_stats:
+            model_stats[provider] = {"tasks": 0, "ok": 0, "fail": 0, "cost": 0.0, "tokens": 0, "time": 0.0}
+        model_stats[provider]["tasks"] += 1
+        model_stats[provider]["ok"] += 1 if r.success else 0
+        model_stats[provider]["fail"] += 0 if r.success else 1
+        model_stats[provider]["cost"] += r.cost_usd
+        model_stats[provider]["tokens"] += r.tokens_input + r.tokens_output
+        model_stats[provider]["time"] += r.duration_seconds
+
+    usage_table = Table(title="Uso por Modelo (5 LLMs)", show_lines=False)
+    usage_table.add_column("Provider", style="bold")
+    usage_table.add_column("Tarefas", justify="center")
+    usage_table.add_column("OK", justify="center", style="green")
+    usage_table.add_column("Falha", justify="center", style="red")
+    usage_table.add_column("Tokens", justify="right")
+    usage_table.add_column("Custo (US$)", justify="right")
+    usage_table.add_column("Tempo (s)", justify="right")
+    usage_table.add_column("Cobertura", justify="center")
+
+    all_providers = ["Anthropic/Claude", "OpenAI/GPT-4o", "Google/Gemini", "Perplexity/Sonar", "Groq/Llama"]
+    provider_aliases = {
+        "Anthropic/Claude": ["anthropic", "claude", "architect"],
+        "OpenAI/GPT-4o": ["openai", "gpt4o", "gpt-4o", "writer"],
+        "Google/Gemini": ["google", "gemini", "analyzer"],
+        "Perplexity/Sonar": ["perplexity", "sonar", "researcher"],
+        "Groq/Llama": ["groq", "llama", "groq_agent"],
+    }
+
+    used_count = 0
+    for display_name in all_providers:
+        aliases = provider_aliases[display_name]
+        stats = {"tasks": 0, "ok": 0, "fail": 0, "cost": 0.0, "tokens": 0, "time": 0.0}
+        for alias in aliases:
+            for key, val in model_stats.items():
+                if alias.lower() in key.lower():
+                    for k in stats:
+                        stats[k] += val[k]
+        if stats["tasks"] > 0:
+            used_count += 1
+            coverage = "[green]USADO[/green]"
+        else:
+            coverage = "[red]NAO USADO[/red]"
+        usage_table.add_row(
+            display_name,
+            str(stats["tasks"]),
+            str(stats["ok"]),
+            str(stats["fail"]),
+            f"{stats['tokens']:,}",
+            f"{stats['cost']:.4f}",
+            f"{stats['time']:.1f}",
+            coverage,
+        )
+
+    console.print()
+    console.print(usage_table)
+    coverage_pct = (used_count / 5) * 100
+    color = "green" if used_count == 5 else "yellow" if used_count >= 3 else "red"
+    console.print(f"\n[{color}]Cobertura de modelos: {used_count}/5 ({coverage_pct:.0f}%)[/{color}]")
+    if used_count < 5:
+        console.print("[yellow]Atenção: nem todos os 5 modelos foram utilizados nesta execução.[/yellow]")
+
 
 def _save_report(plan: dict, results: list[TaskResult], output_dir: Path) -> None:
     """Salva relatório completo da execução."""
