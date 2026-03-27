@@ -101,9 +101,9 @@ class Router:
     def get_model_status_table(self) -> str:
         """Return a formatted status table of all models and their usage."""
         lines = []
-        lines.append("┌─────────────┬──────────┬───────────┐")
-        lines.append("│ Modelo      │ Tarefas  │ Status    │")
-        lines.append("├─────────────┼──────────┼───────────┤")
+        lines.append("+-------------+----------+-----------+")
+        lines.append("| Modelo      | Tarefas  | Status    |")
+        lines.append("+-------------+----------+-----------+")
         for name in LLM_CONFIGS:
             cfg = LLM_CONFIGS[name]
             count = self._session_usage.get(name, 0)
@@ -113,11 +113,11 @@ class Router:
             elif name in self._rate_limited:
                 status = "rate-limit"
             elif count > 0:
-                status = "ativo"
+                status = "ATIVO"
             else:
                 status = "aguardando"
-            lines.append(f"│ {name:<11} │ {count:>6}   │ {status:<9} │")
-        lines.append("└─────────────┴──────────┴───────────┘")
+            lines.append(f"| {name:<11} | {count:>6}   | {status:<9} |")
+        lines.append("+-------------+----------+-----------+")
         return "\n".join(lines)
 
     def _least_used_llm(self, candidates: list[str]) -> str:
