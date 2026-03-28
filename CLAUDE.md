@@ -174,7 +174,7 @@ python cli.py trace last
 - OpenAI: 60 RPM, burst 3
 - Google: 30 RPM, burst 3 (billing ativo, R$500 credito)
 - Perplexity: 20 RPM, burst 2
-- Groq: 30 RPM, burst 3
+- Groq: 300 RPM, burst 10 (free tier: 500K RPM, 300K tokens/min)
 
 ## GitHub
 
