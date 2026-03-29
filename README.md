@@ -1,349 +1,300 @@
 # geo-orchestrator
 
-**5 LLMs** | **8.100+ linhas** | **72+ arquivos** | **21 commits** | **6 rodadas de melhoria multi-LLM**
+![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
+![LLMs](https://img.shields.io/badge/LLMs-5_providers-ff6b35)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+
+Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude, routes each task to the most appropriate LLM based on adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, and full FinOps governance.
+
+**8,100+ lines | 72+ files | 21 commits | 12+ orchestrator executions**
 
 ---
 
-## O que e
-
-O geo-orchestrator e o orquestrador multi-LLM da Brasil GEO. Ele recebe uma demanda em linguagem natural, usa o Claude para decompor automaticamente em tarefas atomicas e discretas, e roteia cada tarefa para o LLM mais adequado com base em um sistema de scoring adaptativo. Tarefas independentes sao executadas em paralelo (waves), e os resultados de cada etapa alimentam as etapas seguintes como contexto otimizado.
-
-O sistema inclui governanca FinOps completa com limites diarios por provider, budget guard pre-execucao, cache de resultados com TTL, checkpoints para retomada de execucoes interrompidas, quality gates por tipo de tarefa com retry automatico via fallback, rate limiting por provider com token bucket, deduplicacao inteligente de tarefas similares e observabilidade com timeline Gantt e breakdown de custos. A partir da rodada 3, inclui circuit breaker, dashboard de metricas, token budget allocator e memoria de agentes.
-
----
-
-## 6 rodadas de melhoria com 5 LLMs
-
-O geo-orchestrator passou por 6 rodadas de aprimoramento executadas por uma banca de 5 LLMs.
-
-| Rodada | Foco | Principais entregas |
-|--------|------|---------------------|
-| **Round 1** | Fundacao | Orquestrador, pipeline, router adaptativo, 4 agentes, CLI, cache SHA-256, checkpoints, quality gates, budget guard |
-| **Round 2** | Resiliencia e observabilidade | FinOps com limites diarios, rate limiter token bucket, tracing com spans, connection pool, cost tracker, context pipeline, feedback loop |
-| **Round 3** | Inteligencia avancada | Circuit breaker, dashboard de metricas, token budget allocator, memoria de agentes, session load balancer, task re-prioritization, complexity scoring |
-| **Round 4** | Web showcase | Pagina de showcase gerada pelos 5 LLMs, deploy automatico |
-| **Round 5** | Security hardening | API keys via headers (nao URL params), git filter-repo para limpar historico, .gitignore em todos os repos, rotacao de todas as chaves |
-| **Round 6** | MARL (Multi-Agent RL) | Analise baseada em Foerster/Jaques/Albrecht. 12 tarefas, 7 grupos, 5 LLMs, US$ 2.68. Propostas: comunicacao inter-agente, feedback colaborativo, balanceador adaptativo |
-
-## Seguranca
-
-- API keys **nunca em URLs** — Google API key via header `x-goog-api-key`
-- Todos os secrets via variaveis de ambiente (`.env` no `.gitignore`)
-- Diretorio `output/` excluido do git (contem logs com dados sensiveis)
-- Historico git limpo com `git filter-repo` apos incidente GitGuardian
-- Modulo de auditoria: `papers/src/finops/secrets.py` com scan de leaks
-
----
-
-## Arquitetura
+## Architecture
 
 ```
-Demanda --> Orchestrator (Claude decompoe) --> Router (score adaptativo)
-                                                      |
-                                      +---------------+---------------+
-                                      |               |               |
-                                Wave 1 (parallel) Wave 2 (parallel) Wave 3
-                                +--+--+--+      +--+--+          +--+
-                                |P |G |O |      |C |G |          |C |
-                                +--+--+--+      +--+--+          +--+
-                                P=Perplexity G=Gemini O=OpenAI C=Claude Q=Groq
+Demand --> Orchestrator (Claude decomposes) --> Router (adaptive scoring)
+                                                       |
+                                       +---------------+---------------+
+                                       |               |               |
+                               Wave 1 (parallel) Wave 2 (parallel)  Wave 3
+                               +--+--+--+         +--+--+            +--+
+                               |P |G |O |         |C |G |            |C |
+                               +--+--+--+         +--+--+            +--+
+                               P=Perplexity G=Gemini O=OpenAI C=Claude Q=Groq
 
-                                      |
-                                      v
-                             Resultado consolidado
-                          (relatorio + Gantt + custos)
+                                       |
+                                       v
+                              Consolidated result
+                           (report + Gantt + cost breakdown)
 ```
 
 ---
 
-## 5 LLMs e seus papeis
+## 5 LLMs and Their Roles
 
-| Provider | Modelo | Papel | Custo/1M tokens (in/out) | RPM |
-|----------|--------|-------|--------------------------|-----|
-| **Anthropic** | claude-opus-4-6-20250415 | Decomposicao, arquitetura, codigo, revisao | US$ 15.00 / US$ 75.00 | 60 |
-| **OpenAI** | gpt-4o | Redacao longa, copywriting, SEO, traducao | US$ 2.50 / US$ 10.00 | 60 |
-| **Google** | gemini-2.5-flash | Analise rapida, classificacao, sumarizacao, lotes | US$ 0.15 / US$ 0.60 | 30 |
-| **Perplexity** | sonar | Pesquisa ao vivo com fontes e citacoes | US$ 1.00 / US$ 1.00 | 20 |
-| **Groq** | llama-3.3-70b-versatile | Tarefas de alta velocidade, classificacao rapida, rascunhos | US$ 0.59 / US$ 0.79 | 30 |
+| Provider | Model | Role | Cost/1M tokens (in/out) | RPM |
+|---|---|---|---|---|
+| **Perplexity** | sonar | Live research with sources and citations | $1.00 / $1.00 | 20 |
+| **OpenAI** | gpt-4o | Long-form writing, copywriting, SEO, translation | $2.50 / $10.00 | 60 |
+| **Google** | gemini-2.5-pro | Deep analysis, classification, batch processing | $3.50 / $10.50 | 30 |
+| **Groq** | llama-3.3-70b-versatile | High-speed classification, rapid drafts | $0.59 / $0.79 | 300 |
+| **Anthropic** | claude-opus-4-6 | Decomposition, architecture, code, review | $15.00 / $75.00 | 60 |
 
----
+### Pipeline Role Assignment
 
-## 12 tipos de tarefa
-
-| Tipo | LLM primario | Fallback | Descricao |
-|------|-------------|----------|-----------|
-| `research` | Perplexity | Gemini | Pesquisa com dados em tempo real e fontes |
-| `analysis` | Gemini | Claude | Analise de dados estruturados |
-| `writing` | GPT-4o | Claude | Redacao de conteudo longo em PT-BR |
-| `copywriting` | GPT-4o | Claude | Copy persuasiva e marketing |
-| `code` | Claude | GPT-4o | Geracao de codigo de producao |
-| `review` | Claude | GPT-4o | Revisao critica e quality check |
-| `seo` | GPT-4o | Perplexity | Otimizacao para mecanismos de busca |
-| `data_processing` | Gemini | GPT-4o | Processamento de dados em lote |
-| `fact_check` | Perplexity | Gemini | Verificacao de fatos com fontes |
-| `classification` | Gemini | Claude | Classificacao e categorizacao |
-| `translation` | GPT-4o | Gemini | Traducao entre idiomas |
-| `summarization` | Gemini | GPT-4o | Sumarizacao de textos longos |
+| Stage | LLM | Function |
+|---|---|---|
+| Research | Perplexity | Gathers live data with citations |
+| Writing | GPT-4o | Produces final long-form content |
+| Analysis | Gemini 2.5 Pro | Analyzes and structures data |
+| Classification | Groq/Llama-3.3-70B | Fast categorization and tagging |
+| Review | Claude Opus 4.6 | Quality check and final revision |
 
 ---
 
-## Funcionalidades de inteligencia
+## 12 Task Types
 
-### Round 1 — Fundacao
-
-- **Cache de resultados**: SHA-256 com TTL 24h. Tarefas identicas nao sao reexecutadas.
-- **Checkpoints**: Estado salvo por wave. Retomada sem reexecutar tarefas ja concluidas.
-- **Quality Gates**: Validacao automatica por tipo de tarefa. Falha aciona retry no fallback.
-- **Budget Guard**: Estimativa pre-execucao. Bloqueio se custo > limite, abort se real > 2x estimativa.
-- **Router Adaptativo**: Score ponderado — sucesso (60%), custo (20%), latencia (20%).
-- **Deduplicacao**: Cosine similarity > 0.7 funde tarefas automaticamente.
-- **Context Optimization**: Outputs longos sumarizados via Gemini antes de injetar como contexto.
-
-### Round 2 — Resiliencia e observabilidade
-
-- **Rate Limiter**: Token bucket por provider com burst e stagger para Gemini.
-- **FinOps**: Limites diarios por provider, relatorio de custos, historico em JSONL.
-- **Tracing**: Spans por tarefa com timeline, duracao e metadata. Comandos `trace list/show/last`.
-- **Connection Pool**: Reutilizacao de conexoes HTTP por provider.
-- **Feedback Loop**: Resultados de quality gates ajustam scores do router.
-- **Context Pipeline**: Cadeia de processamento de contexto entre waves.
-- **Task Re-prioritization**: Reordenacao de tarefas com base em resultados parciais.
-
-### Round 3 — Inteligencia avancada
-
-- **Circuit Breaker**: Protecao contra providers fora do ar. Abre circuito apos falhas consecutivas, tenta half-open periodicamente.
-- **Dashboard**: Metricas consolidadas de uso, custos e performance por provider.
-- **Token Budget Allocator**: Distribuicao inteligente de budget de tokens entre tarefas com base em complexidade.
-- **Agent Memory**: Agentes mantem contexto entre execucoes para melhorar qualidade progressivamente.
-- **Session Load Balancer**: Distribuicao de carga entre providers na mesma sessao.
-- **Complexity Scoring**: Estimativa automatica de complexidade para roteamento e alocacao de recursos.
+| Type | Primary LLM | Fallback |
+|---|---|---|
+| `research` | Perplexity | Gemini |
+| `analysis` | Gemini | Claude |
+| `writing` | GPT-4o | Claude |
+| `copywriting` | GPT-4o | Claude |
+| `code` | Claude | GPT-4o |
+| `review` | Claude | GPT-4o |
+| `seo` | GPT-4o | Perplexity |
+| `data_processing` | Gemini | GPT-4o |
+| `fact_check` | Perplexity | Gemini |
+| `classification` | Groq | Gemini |
+| `translation` | GPT-4o | Gemini |
+| `summarization` | Gemini | GPT-4o |
 
 ---
 
-## FinOps e Governanca
-
-### Limites diarios por provider
-
-| Provider | Limite diario (US$) | Variavel de ambiente |
-|----------|--------------------:|---------------------|
-| Anthropic | 2.00 | `FINOPS_LIMIT_ANTHROPIC` |
-| OpenAI | 2.00 | `FINOPS_LIMIT_OPENAI` |
-| Google | 1.00 (billing ativo, R$500) | `FINOPS_LIMIT_GOOGLE` |
-| Perplexity | 1.00 | `FINOPS_LIMIT_PERPLEXITY` |
-| Groq | 1.00 | `FINOPS_LIMIT_GROQ` |
-| **Global** | **5.00** | `FINOPS_LIMIT_GLOBAL` |
-
-### Budget Guard
-
-- **Pre-execucao**: Estima custo total com base no tipo de tarefa e LLM roteado. Bloqueia se exceder `GEO_BUDGET_LIMIT` (padrao US$ 5.00).
-- **Runtime**: Se o custo real ultrapassar 2x a estimativa, emite alerta.
-- **Override**: Use `--force` para ignorar o budget guard.
-
----
-
-## Instalacao
+## CLI Commands
 
 ```bash
-# Clonar o repositorio
-git clone https://github.com/alexandrebrt14-sys/geo-orchestrator.git
-cd geo-orchestrator
+# Full pipeline
+python cli.py run "Write a complete study on GEO vs traditional SEO"
 
-# Instalar dependencias
-pip install -e .
+# View plan without executing
+python cli.py plan "Research competitors and write report"
 
-# Configurar variaveis de ambiente
-cp .env.example .env
-# Editar .env com suas chaves de API
-```
-
-### Chaves necessarias
-
-| Variavel | Provider | Onde obter |
-|----------|----------|------------|
-| `ANTHROPIC_API_KEY` | Anthropic (Claude) | https://console.anthropic.com/ |
-| `OPENAI_API_KEY` | OpenAI (GPT-4o) | https://platform.openai.com/ |
-| `PERPLEXITY_API_KEY` | Perplexity (Sonar) | https://docs.perplexity.ai/ |
-| `GOOGLE_AI_API_KEY` | Google (Gemini) | https://aistudio.google.com/ |
-| `GROQ_API_KEY` | Groq (Llama 3.3 70B) | https://console.groq.com/ |
-
----
-
-## Uso
-
-### CLI — comandos principais
-
-```bash
-# Pipeline completo
-python cli.py run "Faca um estudo sobre GEO e crie uma landing page"
-
-# Ver plano sem executar
-python cli.py plan "Pesquise concorrentes e escreva relatorio"
-
-# Status dos LLMs
+# LLM status
 python cli.py status
 
-# Listar modelos configurados
+# List configured models and pricing
 python cli.py models
 
-# Relatorio de custos
+# Cost report
 python cli.py cost-report
 
 # FinOps
-python cli.py finops status     # Estado atual dos limites
-python cli.py finops reset      # Resetar contadores
-python cli.py finops report     # Relatorio detalhado
+python cli.py finops status     # Current limit state
+python cli.py finops reset      # Reset daily counters
+python cli.py finops report     # Detailed cost report
 
 # Tracing
-python cli.py trace list        # Listar traces recentes
-python cli.py trace show <id>   # Detalhes de um trace
-python cli.py trace last        # Ultimo trace
+python cli.py trace list        # List recent traces
+python cli.py trace show <id>   # Trace details
+python cli.py trace last        # Last trace
 ```
 
-### Opcoes do comando run
+### Run Options
 
 ```bash
-python cli.py run "demanda" --dry-run          # Mostra plano sem executar
-python cli.py run "demanda" --verbose           # Progresso detalhado
-python cli.py run "demanda" --output-dir ./out  # Diretorio de saida customizado
-python cli.py run "demanda" --force             # Ignora budget guard
-```
-
-### Scripts auxiliares
-
-```bash
-# Banca de 5 LLMs — auditoria e melhoria colaborativa
-python scripts/run_5llm_board.py
-
-# Implementar melhorias identificadas pela banca (round 2)
-python scripts/implement_improvements.py
-
-# Melhorias profundas da rodada 3
-python scripts/round3_deep_improvements.py
+python cli.py run "demand" --dry-run          # Show plan without executing
+python cli.py run "demand" --verbose          # Detailed progress output
+python cli.py run "demand" --output-dir ./out # Custom output directory
+python cli.py run "demand" --force            # Override budget guard
 ```
 
 ---
 
-## Exemplos de demandas reais
+## Claude Code Integration
 
-### 1. Estudo completo com publicacao
-
-```bash
-python cli.py run "Faca um estudo completo sobre GEO comparando com SEO tradicional, \
-incluindo dados de mercado, cases e tendencias. Publique como artigo no site."
-```
-
-**Decomposicao automatica:**
-
-| Wave | Tarefas | LLM |
-|------|---------|-----|
-| Wave 1 (paralelo) | T1: Pesquisar GEO vs SEO | Perplexity |
-| Wave 1 (paralelo) | T2: Pesquisar cases e mercado | Perplexity |
-| Wave 2 | T3: Consolidar e analisar dados | Gemini |
-| Wave 3 | T4: Redigir estudo completo | GPT-4o |
-| Wave 4 | T5: Gerar codigo da pagina | Claude |
-| Wave 5 | T6: Revisao de qualidade | Claude |
-
-### 2. Analise de concorrentes
+A bridge script enables direct integration from Claude Code sessions:
 
 ```bash
-python cli.py run "Mapeie os 10 principais concorrentes em GEO, \
-analise posicionamento e sugira diferenciais para a Brasil GEO"
+bash C:/Sandyboxclaude/scripts/bin/geo-bridge.sh "your demand here"
 ```
 
-**Decomposicao:** Perplexity pesquisa concorrentes -> Gemini classifica e compara -> GPT-4o redige relatorio -> Claude revisa.
-
-### 3. Conteudo multicanal
-
-```bash
-python cli.py run "Escreva um artigo sobre entity consistency para LLMs, \
-otimizado para SEO, com versoes para blog e LinkedIn"
-```
-
-**Decomposicao:** Perplexity pesquisa o tema -> GPT-4o escreve artigo principal + versao LinkedIn em paralelo -> Claude revisa ambos.
-
-### 4. Prototipo tecnico
-
-```bash
-python cli.py run "Crie um dashboard de metricas GEO com React, \
-incluindo graficos de citacoes e entity consistency"
-```
-
-**Decomposicao:** Perplexity pesquisa APIs de metricas -> Claude gera arquitetura -> Claude gera codigo -> Claude revisa.
+The bridge script automatically:
+- Loads API keys from `geo-orchestrator/.env`
+- Changes to the orchestrator directory
+- Executes `python cli.py run "$@" --verbose`
+- Displays a summary of LLMs used and their costs
 
 ---
 
-## Custos estimados
+## Integration: curso-factory
 
-| Tipo de demanda | Tarefas | Custo estimado |
-|-----------------|---------|----------------|
-| Pesquisa simples | 2-3 | US$ 0.01-0.05 |
-| Artigo com pesquisa | 4-5 | US$ 0.05-0.15 |
-| Estudo completo | 6-8 | US$ 0.10-0.50 |
-| Site com conteudo | 7-10 | US$ 0.50-1.50 |
+The orchestrator integrates with [curso-factory](https://github.com/alexandrebrt14-sys/curso-factory) for automated course generation:
 
-**Custo total das 3 rodadas de melhoria com 5 LLMs: US$ 0.045**
+- Perplexity researches the topic and market context
+- GPT-4o drafts module content and scripts
+- Gemini structures the curriculum and learning objectives
+- Claude reviews quality and pedagogical consistency
+- Output feeds directly into the curso-factory Jinja2 templates
+
+The alexandrecaramaschi.com platform currently hosts **35 courses, 387 modules, 122K+ lines** produced through this pipeline.
 
 ---
 
-## Estrutura do projeto
+## Improvement Rounds
+
+| Round | Focus | Key Deliverables |
+|---|---|---|
+| **Round 1** | Foundation | Orchestrator, pipeline, adaptive router, 4 agents, CLI, SHA-256 cache, checkpoints, quality gates, budget guard |
+| **Round 2** | Resilience & observability | FinOps with daily limits, token bucket rate limiter, tracing with spans, connection pool, cost tracker, context pipeline, feedback loop |
+| **Round 3** | Advanced intelligence | Circuit breaker, metrics dashboard, token budget allocator, agent memory, session load balancer, task re-prioritization, complexity scoring |
+| **Round 4** | Web showcase | Showcase page generated by 5 LLMs, automatic deploy |
+| **Round 5** | Security hardening | API keys via headers (not URL params), git filter-repo to clean history, .gitignore on all repos, key rotation |
+| **Round 6** | MARL analysis | Analysis based on Foerster/Jaques/Albrecht. 12 tasks, 7 groups, 5 LLMs, $2.68. Proposals: inter-agent communication, collaborative feedback, adaptive balancer |
+
+---
+
+## Intelligence Features
+
+### Foundation (Round 1)
+
+- **Result Cache**: SHA-256 with 24h TTL. Identical tasks are not re-executed.
+- **Checkpoints**: State saved per wave. Resume without re-executing completed tasks.
+- **Quality Gates**: Automatic validation per task type. Failure triggers retry on fallback.
+- **Budget Guard**: Pre-execution cost estimate. Blocks if cost > limit, alert if real > 2x estimate.
+- **Adaptive Router**: Weighted score — success (60%), cost (20%), latency (20%).
+- **Deduplication**: Cosine similarity > 0.7 merges tasks automatically.
+- **Context Optimization**: Long outputs summarized via Gemini before injecting as context.
+
+### Resilience (Round 2)
+
+- **Rate Limiter**: Token bucket per provider with burst and stagger for Gemini.
+- **FinOps**: Daily limits per provider, cost reports, history in JSONL.
+- **Tracing**: Spans per task with timeline, duration, and metadata.
+- **Connection Pool**: HTTP connection reuse per provider.
+- **Feedback Loop**: Quality gate results adjust router scores.
+
+### Advanced Intelligence (Round 3)
+
+- **Circuit Breaker**: Protection against offline providers. Opens circuit after consecutive failures, tries half-open periodically.
+- **Dashboard**: Consolidated usage, cost, and performance metrics per provider.
+- **Token Budget Allocator**: Intelligent distribution of token budget between tasks based on complexity.
+- **Agent Memory**: Agents maintain context between executions to progressively improve quality.
+
+---
+
+## FinOps and Governance
+
+### Daily Limits per Provider
+
+| Provider | Daily Limit (USD) | Env Variable |
+|---|---|---|
+| Anthropic | $2.00 | `FINOPS_LIMIT_ANTHROPIC` |
+| OpenAI | $2.00 | `FINOPS_LIMIT_OPENAI` |
+| Google | $1.00 | `FINOPS_LIMIT_GOOGLE` |
+| Perplexity | $1.00 | `FINOPS_LIMIT_PERPLEXITY` |
+| Groq | $1.00 | `FINOPS_LIMIT_GROQ` |
+| **Global** | **$5.00** | `FINOPS_LIMIT_GLOBAL` |
+
+### Estimated Costs by Demand Type
+
+| Demand Type | Tasks | Estimated Cost |
+|---|---|---|
+| Simple research | 2-3 | $0.01-0.05 |
+| Article with research | 4-5 | $0.05-0.15 |
+| Complete study | 6-8 | $0.10-0.50 |
+| Site with content | 7-10 | $0.50-1.50 |
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/alexandrebrt14-sys/geo-orchestrator.git
+cd geo-orchestrator
+pip install -e .
+cp .env.example .env
+# Edit .env with your API keys
+```
+
+### Required Keys
+
+| Variable | Provider |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic (Claude) |
+| `OPENAI_API_KEY` | OpenAI (GPT-4o) |
+| `PERPLEXITY_API_KEY` | Perplexity (Sonar) |
+| `GOOGLE_AI_API_KEY` | Google (Gemini) |
+| `GROQ_API_KEY` | Groq (Llama 3.3 70B) |
+
+---
+
+## Project Structure
 
 ```
-geo-orchestrator/                          # 7.471 linhas | 72 arquivos | 14 commits
-  cli.py                                   # CLI principal (Click) — ponto de entrada
-  pyproject.toml                           # Configuracao do projeto e dependencias
-  .env.example                             # Template de variaveis de ambiente
-  CLAUDE.md                                # Instrucoes para Claude Code
-  README.md                                # Este arquivo
+geo-orchestrator/
+  cli.py                    # Main CLI (Click) — entry point
+  pyproject.toml            # Project configuration and dependencies
+  .env.example              # Environment variable template
   src/
-    __init__.py
-    config.py                              # LLM configs, task routing, FinOps limits, budget
-    models.py                              # Pydantic models (Task, Plan, TaskResult, ExecutionReport)
-    orchestrator.py                        # Orquestrador principal (decompose, deduplicate, cache, execute)
-    pipeline.py                            # Engine de execucao (waves, checkpoints, quality gates, fallback)
-    router.py                              # Router adaptativo (scoring, fallback, session load balancer)
-    llm_client.py                          # Cliente HTTP unificado para 5 providers (retry, backoff)
-    rate_limiter.py                        # Token bucket por provider (RPM limits, burst, stagger)
-    cost_tracker.py                        # Rastreamento de custos por tarefa e por LLM
-    finops.py                              # FinOps engine — limites diarios, alertas, relatorios
-    tracer.py                              # Tracing com spans — timeline e observabilidade
-    connection_pool.py                     # Pool de conexoes HTTP por provider
+    config.py               # LLM configs, task routing, FinOps limits
+    models.py               # Pydantic models (Task, Plan, TaskResult, ExecutionReport)
+    orchestrator.py         # Core: decompose, deduplicate, cache, budget guard, report
+    pipeline.py             # Execution engine: waves, checkpoints, quality gates, fallback
+    router.py               # Adaptive router: scoring, fallback, session load balancer
+    llm_client.py           # Unified HTTP client for 5 providers (retry, backoff)
+    rate_limiter.py         # Token bucket per provider (RPM limits, burst, stagger)
+    cost_tracker.py         # Cost tracking per task and per LLM
+    finops.py               # FinOps engine: daily limits, alerts, reports
+    tracer.py               # Tracing with spans: timeline and observability
+    connection_pool.py      # HTTP connection pool per provider
+    circuit_breaker.py      # Circuit breaker per provider: CLOSED/OPEN/HALF_OPEN
     agents/
-      __init__.py
-      base.py                              # BaseAgent, TaskResult, TaskType
-      researcher.py                        # Agente Perplexity (pesquisa com citacoes)
-      writer.py                            # Agente GPT-4o (redacao, copy, SEO)
-      architect.py                         # Agente Claude (codigo, arquitetura, revisao)
-      analyzer.py                          # Agente Gemini (analise, classificacao, lotes)
-      groq_agent.py                        # Agente Groq Llama 3.3 70B (velocidade, rascunhos)
-    templates/
-      __init__.py
-      decomposition.py                     # Prompt de decomposicao de demandas
-      agent_prompts.py                     # System prompts por tipo de agente
+      researcher.py         # Perplexity agent (research with citations)
+      writer.py             # GPT-4o agent (writing, copy, SEO)
+      architect.py          # Claude agent (code, architecture, review)
+      analyzer.py           # Gemini agent (analysis, classification, batch)
+      groq_agent.py         # Groq Llama 3.3 70B agent (speed, rapid drafts)
   scripts/
-    run_5llm_board.py                      # Banca de 5 LLMs — auditoria colaborativa
-    implement_improvements.py              # Implementador de melhorias (round 2)
-    round3_deep_improvements.py            # Melhorias profundas (round 3)
+    run_5llm_board.py       # 5-LLM board: collaborative audit and improvement
+    implement_improvements.py
+    round3_deep_improvements.py
   docs/
-    MANUAL.md                              # Manual tecnico completo
-    ARCHITECTURE.md                        # Arquitetura tecnica detalhada
-  output/                                  # Relatorios de execucao, cache, checkpoints
+    MANUAL.md               # Complete technical manual
+    ARCHITECTURE.md         # Detailed technical architecture
+  output/                   # Execution reports, cache, checkpoints
 ```
 
 ---
 
-## 4 agentes especializados + 1 speed agent
+## Security
 
-| Agente | LLM | Especializacao |
-|--------|-----|----------------|
-| Researcher | Perplexity Sonar | Pesquisa ao vivo com fontes e citacoes |
-| Writer | GPT-4o | Redacao longa, copywriting, SEO, traducao |
-| Architect | Claude Opus | Codigo, arquitetura, decomposicao, revisao |
-| Analyzer | Gemini Flash | Analise, classificacao, sumarizacao, lotes |
-| Groq Agent | Llama 3.3 70B | Tarefas de alta velocidade, classificacao rapida |
+- API keys **never in URLs** — Google API key via `x-goog-api-key` header
+- All secrets via environment variables (`.env` in `.gitignore`)
+- `output/` directory excluded from git (contains logs with sensitive data)
+- Git history cleaned with `git filter-repo` after GitGuardian incident
+- Audit module: `papers/src/finops/secrets.py` with leak scanning
 
 ---
 
-## Repositorio
+## Repository
 
 - **GitHub**: https://github.com/alexandrebrt14-sys/geo-orchestrator
-- **Proprietario**: Alexandre Caramaschi — CEO da Brasil GEO, ex-CMO da Semantix (Nasdaq), cofundador da AI Brasil
+- **Owner**: Alexandre Caramaschi — CEO of Brasil GEO, former CMO at Semantix (Nasdaq), co-founder of AI Brasil
+
+---
+
+## Ecosystem
+
+| Property | Stack | Status |
+|---|---|---|
+| [alexandrecaramaschi.com](https://alexandrecaramaschi.com) | Next.js 16 + React 19 + Supabase | Production — 35 courses, 25 insights, 122K+ lines |
+| [brasilgeo.ai](https://brasilgeo.ai) | Cloudflare Workers | Production — 14 articles |
+| [geo-orchestrator](https://github.com/alexandrebrt14-sys/geo-orchestrator) | Python + 5 LLMs | Active — multi-LLM pipeline |
+| [curso-factory](https://github.com/alexandrebrt14-sys/curso-factory) | Python + Jinja2 | Active — course generation pipeline |
+| [geo-checklist](https://github.com/alexandrebrt14-sys/geo-checklist) | Markdown | Open-source — GEO audit checklist |
+| [llms-txt-templates](https://github.com/alexandrebrt14-sys/llms-txt-templates) | Markdown + JSON | Open-source — llms.txt standard |
+| [geo-taxonomy](https://github.com/alexandrebrt14-sys/geo-taxonomy) | JSON + CSV + Markdown | Open-source — 60+ GEO terms |
+| [entity-consistency-playbook](https://github.com/alexandrebrt14-sys/entity-consistency-playbook) | Markdown | Open-source — entity consistency |
+| [papers](https://github.com/alexandrebrt14-sys/papers) | Python + Supabase | Research — LLM citation study |
