@@ -289,6 +289,24 @@ class Pipeline:
             # Exibe status dos LLMs ao final de cada wave
             self._print_status()
 
+            # v2.0: Early stopping check between waves
+            if hasattr(self.router, 'should_early_stop'):
+                remaining = sum(1 for w in waves[wave_idx + 1:] for _ in w)
+                if remaining > 0:
+                    completed_outputs = [
+                        r.output for r in self._results.values()
+                        if r.success and r.output
+                    ]
+                    if self.router.should_early_stop(
+                        self.plan.demand, completed_outputs, remaining
+                    ):
+                        logger.info(
+                            "EARLY STOP: demand sufficiently covered after wave %d "
+                            "(%d remaining tasks skipped)",
+                            wave_idx + 1, remaining,
+                        )
+                        break
+
         # Clean up checkpoint on successful completion
         self._clear_checkpoint()
 

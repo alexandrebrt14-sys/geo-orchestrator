@@ -7,7 +7,7 @@ decompoe em tarefas via Claude, roteia cada tarefa para o LLM mais adequado
 (scoring adaptativo + fallback), e executa em waves paralelas com cache,
 checkpoints, quality gates e governanca FinOps.
 
-**Estado atual**: v2.0 | ~9.000 linhas de Python | 76 arquivos | 4 rodadas de melhoria
+**Estado atual**: v2.0 | ~10.500 linhas de Python | 78 arquivos | 4 rodadas de melhoria + upgrade v2.0
 
 ## v2.0 — Upgrade (29/Mar/2026)
 
@@ -21,6 +21,8 @@ Baseado na analise de 38 artigos academicos (CASTER, HALO, AFlow, Anthropic Engi
 | **Prompt Refiner** | `src/prompt_refiner.py` | HALO (arXiv 2505.13516) | +25% qualidade. Pipeline de 3 etapas: parser → enricher → optimizer |
 | **Smart Router** | `src/smart_router.py` | CASTER (arXiv 2601.19793) + Google Research | -72% custo roteamento. Classifica demanda em SIMPLE/MODERATE/COMPLEX |
 | **Quality Judge** | `src/quality_judge.py` | Anthropic Engineering | +35% qualidade mensuravel. Rubrica de 5 dimensoes via Groq |
+| **Semantic Cache** | `src/semantic_cache.py` | AFlow (arXiv 2410.10762) | +250% cache hit rate. Jaccard similarity sobre bag-of-words |
+| **Adaptive Decomposer** | `src/adaptive_decomposer.py` | HALO (arXiv 2505.13516) | +30% qualidade. Macro plan → wave-by-wave micro decomposition |
 
 ### Mudancas no fluxo:
 
@@ -29,8 +31,10 @@ ANTES (v1.0):
   demanda → Claude decompoe tudo → 5 LLMs OBRIGATORIOS → quality gates basicos → output
 
 DEPOIS (v2.0):
-  demanda → Prompt Refiner (3 etapas) → Claude decompoe → Code-First Gate (tarefas deterministicas)
-  → Smart Router classifica tier → 2-5 LLMs sob demanda → Quality Judge (5 dimensoes) → output
+  demanda → Prompt Refiner (3 etapas) → Semantic Cache check → Claude decompoe
+  → Code-First Gate (tarefas deterministicas) → Smart Router classifica tier
+  → 2-5 LLMs sob demanda → Early Stopping entre waves → Quality Judge (5 dimensoes) → output
+  (Adaptive Decomposer disponivel para wave-by-wave via flag)
 ```
 
 ### Metricas projetadas v1.0 vs v2.0:
@@ -68,6 +72,12 @@ src/
     groq_agent.py               # Groq Llama 3.3 70B (round 2)
   circuit_breaker.py              # Circuit breaker por provider: CLOSED/OPEN/HALF_OPEN (round 3)
   performance_router.py           # Router com historico de performance e scoring adaptativo (round 3)
+  code_executor.py                # Code-First Gate: resolve tarefas deterministicas sem LLM (v2.0)
+  prompt_refiner.py               # Pipeline de 3 etapas para refinar prompts (v2.0)
+  smart_router.py                 # Router inteligente com classificacao SIMPLE/MODERATE/COMPLEX (v2.0)
+  quality_judge.py                # LLM-as-Judge com rubrica de 5 dimensoes via Groq (v2.0)
+  semantic_cache.py               # Cache semantico com Jaccard similarity (v2.0)
+  adaptive_decomposer.py          # Decomposicao wave-by-wave adaptativa (v2.0)
   templates/
     decomposition.py            # Prompt de decomposicao (legacy, usado pelo CLI antigo)
     agent_prompts.py            # System prompts por tipo de agente

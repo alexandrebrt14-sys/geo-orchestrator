@@ -23,6 +23,7 @@ from .config import (
     OUTPUT_DIR,
     TASK_TYPES,
 )
+from .adaptive_decomposer import AdaptiveDecomposer
 from .code_executor import try_code_first, stats as code_first_stats
 from .llm_client import LLMClient
 from .models import ExecutionReport, Plan, Task, TaskComplexity, TaskResult
@@ -30,6 +31,7 @@ from .pipeline import Pipeline
 from .prompt_refiner import PromptRefiner
 from .quality_judge import QualityJudge
 from .router import Router
+from .semantic_cache import SemanticCache
 from .smart_router import SmartRouter, DemandTier
 from .tracer import TraceManager
 
@@ -133,8 +135,11 @@ class Orchestrator:
         self._cache_hits = 0
         self._prompt_refiner = PromptRefiner()
         self._quality_judge = QualityJudge()
+        self._semantic_cache = SemanticCache(self._cache_dir)
+        self._adaptive_decomposer: AdaptiveDecomposer | None = None
         self._demand_tier: DemandTier = DemandTier.COMPLEX  # default
         self._code_first_resolved = 0
+        self._semantic_cache_hits = 0
 
     async def decompose(self, demand: str) -> Plan:
         """Send the demand to Claude for decomposition into a structured Plan.
@@ -259,6 +264,18 @@ class Orchestrator:
             if task.id in cached_results:
                 continue  # already resolved by code-first
             cache_span = tracer.start_span("cache.check", task_id=task.id)
+            # v2.0: try semantic cache first, then exact cache
+            sem_result = self._semantic_cache.lookup(task.description, task.type)
+            if sem_result is not None:
+                cached_results[task.id] = TaskResult(
+                    task_id=task.id, llm_used="semantic_cache",
+                    output=sem_result, cost=0.0, success=True, cache_hit=True,
+                )
+                self._semantic_cache_hits += 1
+                self._cache_hits += 1
+                tracer.finish_span(cache_span, status="ok", hit=True, semantic=True)
+                logger.info("SEMANTIC CACHE hit for task '%s'", task.id)
+                continue
             cached = self._check_cache(task)
             if cached is not None:
                 cached_results[task.id] = cached
@@ -330,10 +347,17 @@ class Orchestrator:
                 logger.warning("Quality judge failed: %s", e)
 
         # Phase 6: Cache new results (use quality-aware TTL)
+        cache_ttl = CACHE_TTL_SECONDS
+        if quality_score:
+            cache_ttl = self._quality_judge.get_cache_ttl(quality_score)
         for task in plan.tasks:
             result = results.get(task.id)
             if result and result.success and not result.cache_hit:
                 self._write_cache(task, result)
+                # v2.0: also store in semantic cache
+                self._semantic_cache.store(
+                    task.description, task.type, result.output, ttl=cache_ttl
+                )
 
         # Phase 7: Track running cost and check 2x budget abort
         running_cost = sum(r.cost for r in results.values())
@@ -390,6 +414,10 @@ class Orchestrator:
         logger.info("LLMs ativos: %d/5 | Tier: %s", active_llms,
                     self._demand_tier.value if self._smart_mode else "legacy")
         logger.info("Code-first: %d tarefas resolvidas sem LLM", self._code_first_resolved)
+        sem_stats = self._semantic_cache.get_stats()
+        logger.info("Cache: %d exact + %d semantic hits (%.0f%% hit rate)",
+                    sem_stats.get("exact_hits", 0), sem_stats.get("semantic_hits", 0),
+                    sem_stats.get("hit_rate", 0) * 100)
         if quality_score:
             logger.info("Qualidade: %s (%d%%)", quality_score.verdict, int(quality_score.percentage))
             if quality_score.critical_issues:
