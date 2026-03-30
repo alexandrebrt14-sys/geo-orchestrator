@@ -177,7 +177,11 @@ class Pipeline:
         llm_names = []
         for task in self.plan.tasks:
             try:
-                cfg = self.router.force_all_models_route(task)
+                # v2.0: use smart_route if available, fallback to force_all_models_route
+                if hasattr(self.router, 'smart_route') and hasattr(self.router, '_demand_tier'):
+                    cfg = self.router.smart_route(task, self.router._demand_tier)
+                else:
+                    cfg = self.router.force_all_models_route(task)
                 llm_names.append(cfg.name)
             except RuntimeError:
                 pass

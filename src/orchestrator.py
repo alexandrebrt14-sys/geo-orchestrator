@@ -23,10 +23,14 @@ from .config import (
     OUTPUT_DIR,
     TASK_TYPES,
 )
+from .code_executor import try_code_first, stats as code_first_stats
 from .llm_client import LLMClient
 from .models import ExecutionReport, Plan, Task, TaskComplexity, TaskResult
 from .pipeline import Pipeline
+from .prompt_refiner import PromptRefiner
+from .quality_judge import QualityJudge
 from .router import Router
+from .smart_router import SmartRouter, DemandTier
 from .tracer import TraceManager
 
 logger = logging.getLogger(__name__)
@@ -117,14 +121,20 @@ class Orchestrator:
     and enhanced execution reporting.
     """
 
-    def __init__(self, *, force: bool = False) -> None:
-        self.router = Router()
+    def __init__(self, *, force: bool = False, smart: bool = True) -> None:
+        self._smart_mode = smart
+        self._router = SmartRouter() if smart else Router()
+        self.router = self._router  # alias for pipeline compatibility
         self._claude_cfg = LLM_CONFIGS["claude"]
         self._force = force  # bypass budget confirmation
         self._cache_dir = OUTPUT_DIR / ".cache"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._dedup_count = 0
         self._cache_hits = 0
+        self._prompt_refiner = PromptRefiner()
+        self._quality_judge = QualityJudge()
+        self._demand_tier: DemandTier = DemandTier.COMPLEX  # default
+        self._code_first_resolved = 0
 
     async def decompose(self, demand: str) -> Plan:
         """Send the demand to Claude for decomposition into a structured Plan.
@@ -177,12 +187,48 @@ class Orchestrator:
 
         t0 = time.perf_counter_ns()
 
-        # Phase 1: Decompose
-        plan = await self.decompose(demand)
+        # Phase 0 (v2.0): Refine prompt before decomposition
+        refined_demand = await self._prompt_refiner.refine(demand, "orchestration")
+        logger.info("PROMPT REFINER: demand enriched (%d -> %d chars)", len(demand), len(refined_demand))
+
+        # Phase 1: Decompose (using refined demand for better task generation)
+        plan = await self.decompose(refined_demand)
+        plan.demand = demand  # keep original demand for reporting
         original_task_count = len(plan.tasks)
+
+        # Phase 1.2 (v2.0): Classify demand tier for smart routing
+        if self._smart_mode and isinstance(self._router, SmartRouter):
+            task_types_set = set(t.type for t in plan.tasks)
+            self._demand_tier = self._router.classify_demand(demand, len(plan.tasks))
+            logger.info(
+                "SMART ROUTER: demand classified as %s (%d tasks, %d types)",
+                self._demand_tier.value, len(plan.tasks), len(task_types_set),
+            )
 
         # Phase 1.5: Estimate complexity for each task
         self._estimate_complexity(plan.tasks)
+
+        # Phase 1.7 (v2.0): Code-First Gate — resolve deterministic tasks without LLM
+        code_resolved = []
+        for task in plan.tasks:
+            result = try_code_first(task.description, task.type)
+            if result is not None:
+                self._code_first_resolved += 1
+                cached_result = TaskResult(
+                    task_id=task.id,
+                    llm_used="code_executor",
+                    output=result,
+                    cost=0.0,
+                    duration_ms=1,
+                    success=True,
+                    cache_hit=True,
+                )
+                code_resolved.append((task.id, cached_result))
+                task.status = "completed"
+                logger.info("CODE-FIRST: task '%s' resolved without LLM", task.id)
+        if code_resolved:
+            logger.info("CODE-FIRST: %d/%d tasks resolved by code (saved ~$%.3f)",
+                       len(code_resolved), len(plan.tasks), len(code_resolved) * 0.01)
 
         # Phase 2: Deduplicate similar tasks
         dedup_span = tracer.start_span(
@@ -206,10 +252,12 @@ class Orchestrator:
         # Phase 2.5: Validate LLM balance — ensure all 4 are used
         self._validate_balance(plan.tasks)
 
-        # Phase 3: Check cache for already-computed results
-        cached_results: dict[str, TaskResult] = {}
+        # Phase 3: Check cache for already-computed results (include code-first)
+        cached_results: dict[str, TaskResult] = {tid: r for tid, r in code_resolved}
         tasks_to_run: list[Task] = []
         for task in plan.tasks:
+            if task.id in cached_results:
+                continue  # already resolved by code-first
             cache_span = tracer.start_span("cache.check", task_id=task.id)
             cached = self._check_cache(task)
             if cached is not None:
@@ -259,7 +307,29 @@ class Orchestrator:
 
         total_duration_ms = int((time.perf_counter_ns() - t0) / 1_000_000)
 
-        # Phase 6: Cache new results
+        # Phase 5.5 (v2.0): Quality Judge — evaluate final output
+        quality_score = None
+        if results:
+            try:
+                consolidated_output = "\n\n".join(
+                    f"[{r.llm_used}] {r.output[:500]}" for r in results.values() if r.success and r.output
+                )
+                if consolidated_output:
+                    quality_score = await self._quality_judge.evaluate(
+                        demand=demand,
+                        final_output=consolidated_output[:4000],
+                    )
+                    logger.info(
+                        "QUALITY JUDGE: %s — %d%% (factual=%d, complete=%d, ptbr=%d, efficiency=%d, sources=%d)",
+                        quality_score.verdict, int(quality_score.percentage),
+                        quality_score.factual_accuracy, quality_score.completeness,
+                        quality_score.ptbr_quality, quality_score.efficiency,
+                        quality_score.source_quality,
+                    )
+            except Exception as e:
+                logger.warning("Quality judge failed: %s", e)
+
+        # Phase 6: Cache new results (use quality-aware TTL)
         for task in plan.tasks:
             result = results.get(task.id)
             if result and result.success and not result.cache_hit:
@@ -310,21 +380,23 @@ class Orchestrator:
             summary=summary,
         )
 
-        # Bridge final status: report model usage
+        # v2.0 Enhanced status report
         usage = self._router.get_session_usage()
-        all_used = all(v > 0 for v in usage.values() if LLM_CONFIGS.get(next((k for k, val in usage.items() if val == v), ""), None) and LLM_CONFIGS[next((k for k, val in usage.items() if val == v), "")].available)
-        logger.info("=" * 50)
-        logger.info("BRIDGE — Uso final dos modelos:")
+        logger.info("=" * 60)
+        logger.info("GEO ORCHESTRATOR v2.0 — Relatório Final")
+        logger.info("-" * 60)
         logger.info("\n%s", self._router.get_model_status_table())
-        unused = self._router.get_unused_models()
-        if unused:
-            logger.warning(
-                "BRIDGE ALERTA: %d modelos nao foram usados: %s",
-                len(unused), ", ".join(unused),
-            )
-        else:
-            logger.info("BRIDGE OK: Todos os 5 modelos foram utilizados na execucao.")
-        logger.info("=" * 50)
+        active_llms = sum(1 for v in usage.values() if v > 0)
+        logger.info("LLMs ativos: %d/5 | Tier: %s", active_llms,
+                    self._demand_tier.value if self._smart_mode else "legacy")
+        logger.info("Code-first: %d tarefas resolvidas sem LLM", self._code_first_resolved)
+        if quality_score:
+            logger.info("Qualidade: %s (%d%%)", quality_score.verdict, int(quality_score.percentage))
+            if quality_score.critical_issues:
+                for issue in quality_score.critical_issues[:3]:
+                    logger.info("  ⚠ %s", issue)
+        logger.info("Custo total: US$ %.4f | Tempo: %dms", total_cost, total_duration_ms)
+        logger.info("=" * 60)
 
         # Finish tracing
         tracer.finish_span(
