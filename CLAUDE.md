@@ -43,8 +43,23 @@ DEPOIS (v2.0):
 |---------|------|------|
 | Custo/execucao | $1.85 | ~$0.60 |
 | Tempo/execucao | 35 min | ~12 min |
-| LLMs/execucao | 5 (sempre) | 2-4 (sob demanda) |
+| LLMs/execucao | 5 (sempre) | 2-5 (sob demanda) |
 | Qualidade | nao medida | 75-85% (rubrica) |
+
+### Validacao real (30/Mar/2026):
+
+Teste com 5 tarefas (1 por LLM) — todas concluidas com sucesso:
+
+| LLM | Tempo | Custo | Tokens |
+|-----|-------|-------|--------|
+| Groq Llama 3.3 70B | 3.0s | $0.0019 | 2.937 |
+| GPT-4o | 5.4s | $0.0112 | 3.315 |
+| Gemini 2.5 Flash | 6.9s | $0.0004 | 1.550 |
+| Perplexity sonar-pro | 8.9s | $0.0187 | 1.510 |
+| Claude Opus 4.6 | 53.5s | $0.2234 | 7.454 |
+| **TOTAL** | **77.7s** | **$0.2557** | **16.766** |
+
+Custo real **$0.26** vs estimado v1.0 **$1.85** = **reducao de 86%**.
 
 ## Arquitetura
 
@@ -134,8 +149,11 @@ python cli.py trace last
 | claude | claude-opus-4-6-20250415 | Anthropic | Decomposicao, arquitetura, codigo, revisao |
 | gpt4o | gpt-4o | OpenAI | Redacao, copywriting, SEO, traducao |
 | gemini | gemini-2.5-flash | Google | Analise, classificacao, sumarizacao, lotes |
-| perplexity | sonar | Perplexity | Pesquisa com fontes, fact check |
+| perplexity | sonar-pro | Perplexity | Pesquisa com fontes, fact check |
 | groq | llama-3.3-70b-versatile | Groq | Velocidade, classificacao rapida, rascunhos |
+
+> **REGRA**: Sempre usar a versao mais moderna e potente de cada provider.
+> Atualizar modelos quando novas versoes forem lancadas.
 
 ## 12 tipos de tarefa e roteamento
 

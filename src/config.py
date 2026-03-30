@@ -64,6 +64,9 @@ class LLMConfig:
 # LLM configurations
 # ---------------------------------------------------------------------------
 
+# REGRA: sempre usar a versao mais moderna e potente de cada provider.
+# Atualizar modelos quando novas versoes forem lancadas.
+# Ultima revisao: 2026-03-30
 LLM_CONFIGS: dict[str, LLMConfig] = {
     "claude": LLMConfig(
         name="claude",
@@ -101,7 +104,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
     "perplexity": LLMConfig(
         name="perplexity",
         provider=Provider.PERPLEXITY,
-        model="sonar",
+        model="sonar-pro",
         api_key_env="PERPLEXITY_API_KEY",
         strengths=["live_research", "fact_checking", "citations", "web_search"],
         cost_per_1k_input=0.001,
@@ -245,8 +248,8 @@ FINOPS_DAILY_LIMITS: dict[str, float] = {
     "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "2.00")),
     "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "1.00")),   # Billing ativo (R$500 credito)
     "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "1.00")),
-    "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "0.50")),     # Free tier generoso (30 RPM)
+    "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "2.00")),     # Free tier generoso (300 RPM)
 }
 
 # Global daily budget (sum of all providers, with safety margin)
-FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "5.00"))
+FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "8.00"))
