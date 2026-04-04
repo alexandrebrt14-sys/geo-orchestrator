@@ -14,6 +14,7 @@ import time
 import httpx
 
 from .config import LLMConfig, Provider
+from .connection_pool import ConnectionPool
 from .finops import BudgetExceededError, get_finops
 from .models import LLMResponse
 from .rate_limiter import RateLimiter
@@ -244,10 +245,11 @@ class LLMClient:
         if system:
             body["system"] = system
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
+        pool = ConnectionPool.get_instance()
+        client = await pool.get_client(Provider.ANTHROPIC, timeout=self._timeout)
+        resp = await client.post(url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
 
         text = data["content"][0]["text"]
         usage = data.get("usage", {})
@@ -290,10 +292,11 @@ class LLMClient:
             "messages": messages,
         }
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
+        pool = ConnectionPool.get_instance()
+        client = await pool.get_client(Provider.OPENAI, timeout=self._timeout)
+        resp = await client.post(url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
 
         text = data["choices"][0]["message"]["content"]
         usage = data.get("usage", {})
@@ -342,10 +345,11 @@ class LLMClient:
             "generationConfig": {"maxOutputTokens": max_tokens},
         }
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
+        pool = ConnectionPool.get_instance()
+        client = await pool.get_client(Provider.GOOGLE, timeout=self._timeout)
+        resp = await client.post(url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
 
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         usage = data.get("usageMetadata", {})
@@ -388,10 +392,11 @@ class LLMClient:
             "messages": messages,
         }
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
+        pool = ConnectionPool.get_instance()
+        client = await pool.get_client(Provider.GROQ, timeout=self._timeout)
+        resp = await client.post(url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
 
         text = data["choices"][0]["message"]["content"]
         usage = data.get("usage", {})
@@ -434,10 +439,11 @@ class LLMClient:
             "messages": messages,
         }
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
+        pool = ConnectionPool.get_instance()
+        client = await pool.get_client(Provider.PERPLEXITY, timeout=self._timeout)
+        resp = await client.post(url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
 
         text = data["choices"][0]["message"]["content"]
         usage = data.get("usage", {})
