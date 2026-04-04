@@ -7,7 +7,7 @@ decompoe em tarefas via Claude, roteia cada tarefa para o LLM mais adequado
 (scoring adaptativo + fallback), e executa em waves paralelas com cache,
 checkpoints, quality gates e governanca FinOps.
 
-**Estado atual**: v2.0 | ~10.500 linhas de Python | 78 arquivos | 4 rodadas de melhoria + upgrade v2.0
+**Estado atual**: v2.0 | ~12.500 linhas de Python | 42 arquivos | 33 commits | 116+ execuções
 
 ## v2.0 — Upgrade (29/Mar/2026)
 
@@ -105,6 +105,13 @@ docs/
   MANUAL.md                     # Manual tecnico completo
   ARCHITECTURE.md               # Arquitetura tecnica
 ```
+
+## Source of Truth
+
+- Modelos, preços, capabilities e budgets: `catalog/model_catalog.yaml`
+- API keys: `.env` (NÃO duplicar em outros repos — este é a fonte canônica)
+- Custos reais: `output/execution_*.json` + `output/.finops/`
+- Métricas do ecossistema: `project_inventory.json` (gerado por caramaschi/project_inventory.py)
 
 ## Como executar
 
@@ -209,6 +216,9 @@ python cli.py trace last
 | `scripts/implement_improvements.py` | Implementa melhorias consensuais da banca (round 2) |
 | `scripts/round3_deep_improvements.py` | Melhorias profundas — circuit breaker, dashboard, memory, token allocator |
 
+## Sem Emojis
+Proibido emojis em qualquer conteúdo, output ou documentação.
+
 ## Convencoes
 
 - **Idioma**: PT-BR com acentuacao completa para conteudo, ingles para codigo.
@@ -225,8 +235,8 @@ python cli.py trace last
 ## FinOps
 
 - Budget limit por execucao: US$ 5.00 (env: GEO_BUDGET_LIMIT)
-- Limites diarios: Anthropic US$ 2.00, OpenAI US$ 2.00, Google US$ 1.00, Perplexity US$ 1.00, Groq US$ 1.00
-- Global diario: US$ 5.00
+- Limites diarios: Anthropic US$ 5.00, OpenAI US$ 2.00, Google US$ 1.00, Perplexity US$ 1.00, Groq US$ 2.00
+- Global diario: US$ 10.00
 - Budget guard: bloqueia se estimativa > limite, alert se real > 2x estimativa
 
 ## RPM Limits
