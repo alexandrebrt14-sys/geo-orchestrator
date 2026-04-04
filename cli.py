@@ -113,9 +113,6 @@ TASK_MODEL_MAP = {
     "classification": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
     "summarization": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
     "fact_check": ("sonar-pro", "Perplexity", "magenta"),
-    "classification": ("llama-3.3-70b", "Groq", "red"),
-    "summarization": ("llama-3.3-70b", "Groq", "red"),
-    "translation": ("llama-3.3-70b", "Groq", "red"),
     "deploy": ("local", "Execução Local", "white"),
 }
 

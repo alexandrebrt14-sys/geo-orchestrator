@@ -1,0 +1,163 @@
+# Model Catalog — Single Source of Truth
+# All pricing, routing, budgets and capabilities derive from this file.
+# Generated artifacts: config.py tables, README pricing, site page, CLI help.
+# Last verified: 2026-04-04
+
+version: "1.0"
+last_updated: "2026-04-04"
+
+providers:
+  anthropic:
+    display_name: "Anthropic"
+    models:
+      claude-opus-4-20250514:
+        display: "Claude Opus 4.6"
+        input_cost_per_mtok: 15.00
+        output_cost_per_mtok: 75.00
+        max_tokens: 32000
+        rpm: 50
+        capabilities: [architecture, code_generation, review, deep_reasoning]
+        tier: premium
+        status: active
+      claude-sonnet-4-20250514:
+        display: "Claude Sonnet 4"
+        input_cost_per_mtok: 3.00
+        output_cost_per_mtok: 15.00
+        max_tokens: 16000
+        rpm: 100
+        capabilities: [writing, analysis, classification, code_generation]
+        tier: standard
+        status: active
+      claude-haiku-4-5-20251001:
+        display: "Claude Haiku 4.5"
+        input_cost_per_mtok: 0.80
+        output_cost_per_mtok: 4.00
+        max_tokens: 8000
+        rpm: 200
+        capabilities: [classification, summarization, translation]
+        tier: economy
+        status: active
+
+  openai:
+    display_name: "OpenAI"
+    models:
+      gpt-4o:
+        display: "GPT-4o"
+        input_cost_per_mtok: 2.50
+        output_cost_per_mtok: 10.00
+        max_tokens: 16000
+        rpm: 100
+        capabilities: [writing, seo, copywriting, analysis]
+        tier: standard
+        status: active
+
+  google:
+    display_name: "Google"
+    models:
+      gemini-2.5-flash:
+        display: "Gemini 2.5 Flash"
+        input_cost_per_mtok: 0.15
+        output_cost_per_mtok: 0.60
+        max_tokens: 8000
+        rpm: 100
+        capabilities: [analysis, data_processing, classification, summarization]
+        tier: economy
+        status: active
+
+  perplexity:
+    display_name: "Perplexity"
+    models:
+      sonar-pro:
+        display: "Sonar Pro"
+        input_cost_per_mtok: 3.00
+        output_cost_per_mtok: 15.00
+        max_tokens: 4000
+        rpm: 20
+        capabilities: [research, live_search, citations]
+        tier: standard
+        status: active
+
+  groq:
+    display_name: "Groq"
+    models:
+      llama-3.3-70b-versatile:
+        display: "Llama 3.3 70B"
+        input_cost_per_mtok: 0.59
+        output_cost_per_mtok: 0.79
+        max_tokens: 8000
+        rpm: 30
+        capabilities: [classification, summarization, translation]
+        tier: economy
+        status: active
+
+# Task routing — capabilities required per task type
+task_routing:
+  research:
+    required_capabilities: [research, live_search]
+    preferred_provider: perplexity
+    fallback: [openai, anthropic]
+  writing:
+    required_capabilities: [writing, seo]
+    preferred_provider: openai
+    fallback: [anthropic]
+  analysis:
+    required_capabilities: [analysis, data_processing]
+    preferred_provider: google
+    fallback: [groq, openai]
+  architecture:
+    required_capabilities: [architecture, deep_reasoning]
+    preferred_provider: anthropic
+    model_override: claude-opus-4-20250514
+    fallback: [openai]
+  code_generation:
+    required_capabilities: [code_generation]
+    preferred_provider: anthropic
+    fallback: [openai]
+  review:
+    required_capabilities: [review, deep_reasoning]
+    preferred_provider: anthropic
+    fallback: [openai]
+  classification:
+    required_capabilities: [classification]
+    preferred_provider: groq
+    fallback: [google, anthropic]
+  summarization:
+    required_capabilities: [summarization]
+    preferred_provider: groq
+    fallback: [google]
+  translation:
+    required_capabilities: [translation]
+    preferred_provider: groq
+    fallback: [openai]
+  data_processing:
+    required_capabilities: [data_processing]
+    preferred_provider: google
+    fallback: [groq]
+
+# Budget limits
+budgets:
+  daily_limits:
+    anthropic: 5.00
+    openai: 2.00
+    google: 1.00
+    perplexity: 1.00
+    groq: 2.00
+    global: 10.00
+  per_run_max: 15.00
+  alert_threshold: 0.80  # Alert at 80% of daily limit
+
+# Operational modes
+modes:
+  production:
+    description: "Optimize quality/cost/latency"
+    force_all_models: false
+    max_retries: 3
+  showcase:
+    description: "Force usage of all 5 models for demonstration"
+    force_all_models: true
+    max_retries: 2
+  exploration:
+    description: "Collect data to improve routing"
+    force_all_models: false
+    explore_probability: 0.2
+    max_retries: 2
