@@ -506,7 +506,7 @@ def _save_report(plan: dict, results: list[TaskResult], output_dir: Path) -> Non
                 "tokens_output": r.tokens_output,
                 "cost_usd": r.cost_usd,
                 "duration_seconds": r.duration_seconds,
-                "output_preview": str(r.output)[:500] if r.output else None,
+                "output_preview": str(r.output) if r.output else None,
             }
             for r in results
         ],

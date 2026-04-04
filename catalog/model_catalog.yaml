@@ -54,14 +54,14 @@ providers:
   google:
     display_name: "Google"
     models:
-      gemini-2.5-flash:
-        display: "Gemini 2.5 Flash"
-        input_cost_per_mtok: 0.15
-        output_cost_per_mtok: 0.60
-        max_tokens: 8000
+      gemini-2.5-pro:
+        display: "Gemini 2.5 Pro"
+        input_cost_per_mtok: 1.25
+        output_cost_per_mtok: 5.00
+        max_tokens: 16384
         rpm: 100
-        capabilities: [analysis, data_processing, classification, summarization]
-        tier: economy
+        capabilities: [deep_analysis, data_processing, classification, summarization, reasoning]
+        tier: standard
         status: active
 
   perplexity:

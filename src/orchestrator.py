@@ -329,7 +329,7 @@ class Orchestrator:
         if results:
             try:
                 consolidated_output = "\n\n".join(
-                    f"[{r.llm_used}] {r.output[:500]}" for r in results.values() if r.success and r.output
+                    f"[{r.llm_used}] {r.output[:2000]}" for r in results.values() if r.success and r.output
                 )
                 if consolidated_output:
                     quality_score = await self._quality_judge.evaluate(
