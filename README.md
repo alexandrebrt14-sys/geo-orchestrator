@@ -6,7 +6,7 @@
 
 Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude, routes each task to the most appropriate LLM based on adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, and full FinOps governance.
 
-**8,100+ lines | 72+ files | 21 commits | 12+ orchestrator executions**
+**12,500+ lines | 42 files | 33 commits | 116+ orchestrator executions**
 
 ---
 
