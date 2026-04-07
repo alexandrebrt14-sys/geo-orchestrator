@@ -33,6 +33,7 @@ from .llm_client import LLMClient
 from .models import Plan, Task, TaskResult, TaskStatus
 from .rate_limiter import RateLimiter
 from .router import Router
+from .sanitize import sanitize_path
 from .tracer import TraceManager
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,13 @@ class Pipeline:
             pipeline_span.set_error(exc)
             tracer.finish_span(pipeline_span)
             raise
+
+        # Sprint 3 (2026-04-07): zerar contadores APOS pre_execution_check.
+        # O pre_check chama smart_route/route para estimar custo, e essas
+        # chamadas registravam assignment. Agora a contagem real comeca aqui,
+        # quando a execucao das waves de fato vai acontecer.
+        for k in self.router._session_usage:
+            self.router._session_usage[k] = 0
 
         # Check for existing checkpoint
         resumed_ids = self._load_checkpoint()
@@ -446,8 +454,14 @@ class Pipeline:
             self._checkpoint_path.unlink()
 
     def _save_task_result(self, task_id: str, result: TaskResult) -> None:
-        """Persist a single task result to disk immediately."""
-        result_path = self._results_dir / f"{task_id}.json"
+        """Persist a single task result to disk immediately.
+
+        Sprint 3 (2026-04-07): task_id passa por sanitize_path() porque
+        decomposers podem produzir IDs com acentos/path traversal. Reusa
+        licao do incidente 2026-03-27 (55 hrefs corrompidos por acentos).
+        """
+        # task_id pode vir com acentos ou caracteres perigosos do decomposer
+        result_path = sanitize_path(self._results_dir, f"{task_id}.json")
         result_path.write_text(
             json.dumps(result.model_dump(mode="json"), indent=2, default=str),
             encoding="utf-8",

@@ -25,6 +25,7 @@ from .config import (
 )
 from .adaptive_decomposer import AdaptiveDecomposer
 from .code_executor import try_code_first, stats as code_first_stats
+from .kpi_history import append_kpi_entry, detect_drift
 from .llm_client import LLMClient
 from .models import ExecutionReport, Plan, Task, TaskComplexity, TaskResult
 from .pipeline import Pipeline
@@ -417,6 +418,29 @@ class Orchestrator:
 
         # v2.0 Enhanced status report
         usage = self._router.get_session_usage()
+
+        # Sprint 3 (2026-04-07): persistir KPIs estruturais + checar drift.
+        # KPIs: distribution_health (cobertura LLMs com penalidade de cap)
+        # e cost_estimate_accuracy (real/estimado).
+        try:
+            kpi_entry = append_kpi_entry(
+                demand=demand,
+                real_cost=total_cost,
+                estimated_cost=estimated_cost,
+                duration_ms=total_duration_ms,
+                llm_usage=usage,
+                tasks_completed=completed,
+                tasks_failed=failed,
+            )
+            drift_alert = detect_drift()
+            if drift_alert:
+                # Anexa o alerta ao summary do report para o caller ver
+                report.summary = (
+                    f"{report.summary}\n\n[ALERTA DRIFT] {drift_alert['recommended_action']}"
+                )
+        except Exception as exc:
+            logger.warning("KPI history persist falhou (nao bloqueia execucao): %s", exc)
+
         logger.info("=" * 60)
         logger.info("GEO ORCHESTRATOR v2.0 — Relatório Final")
         logger.info("-" * 60)
@@ -456,43 +480,88 @@ class Orchestrator:
     # Complexity estimation
     # ==================================================================
 
-    # Task types that are inherently complex (premium tier)
-    _HIGH_COMPLEXITY_TYPES = {"code", "review", "architecture"}
-    # Task types that are inherently simple (cheap tier)
+    # Task types DEFAULT (refinado sprint 3 — para acionar tier interno Claude):
+    # Antes: code/review/architecture eram todos HIGH (sempre Opus).
+    # Depois: defaultam para MEDIUM (Sonnet) e so sobem pra HIGH se desc>=long.
+    # Resultado esperado: tarefas medianas de code/review usam Sonnet (-80% custo).
+    _CODE_REVIEW_TYPES = {"code", "review", "architecture", "code_generation"}
     _LOW_COMPLEXITY_TYPES = {"classification", "summarization", "translation", "data_processing"}
+    _RESEARCH_TYPES = {"research", "fact_check"}  # vai pra Perplexity, complexity nao importa muito
 
-    # Description length thresholds for complexity estimation
-    _SHORT_DESC_THRESHOLD = 100   # chars — likely a simple task
-    _LONG_DESC_THRESHOLD = 500    # chars — likely a complex task
+    # Sinais lexicais que indicam baixa complexidade na descricao da task
+    _LOW_COMPLEXITY_KEYWORDS = {
+        "simples", "rapido", "trivial", "basico", "curto", "breve",
+        "listar", "extrair", "filtrar", "contar", "verificar",
+        "checar", "validar", "limpar", "renomear",
+    }
+    # Sinais lexicais que indicam alta complexidade
+    _HIGH_COMPLEXITY_KEYWORDS = {
+        "arquitetar", "projetar", "redesenhar", "implementar do zero",
+        "refatorar", "reescrever", "migrar", "consolidar",
+        "analisar profundamente", "investigar", "diagnosticar",
+    }
+
+    # Thresholds (sprint 3: aumentados para que mais tarefas caiam em low/medium)
+    _SHORT_DESC_THRESHOLD = 180   # antes: 100
+    _LONG_DESC_THRESHOLD = 600    # antes: 500
 
     def _estimate_complexity(self, tasks: list[Task]) -> None:
         """Classify each task as low/medium/high complexity.
 
-        Heuristics:
-        1. Task type: some types are inherently cheap or expensive.
-        2. Description length: longer descriptions = more complex requirements.
-        3. Dependency count: tasks with many deps tend to be synthesis/integration tasks.
+        Sprint 3 (2026-04-07) — refinado para acionar tier interno Claude
+        em runtime. Antes do refator, code/review/architecture eram TODOS
+        marcados como HIGH (sempre Opus, ~$0.13/call). Agora defaultam
+        para MEDIUM (Sonnet, ~$0.03/call) a menos que sinais explicitos
+        indiquem alta complexidade.
 
-        Mutates tasks in-place by setting task.complexity.
+        Heuristicas (na ordem):
+        1. Type-based default:
+           - LOW: classification/summarization/translation/data_processing
+           - MEDIUM: code/review/architecture (era HIGH no v2.0!)
+           - MEDIUM: research/fact_check (Perplexity nao tem tiers)
+           - MEDIUM: outros (writing, analysis, etc.)
+        2. Lexical override: descricao tem keywords low/high.
+        3. Length override: muito curto -> baixa, muito longo -> alta.
+        4. Integration boost: 3+ deps -> sobe um tier.
+
+        Mutates tasks in-place.
         """
         for task in tasks:
-            # Start with type-based classification
-            if task.type in self._HIGH_COMPLEXITY_TYPES:
-                task.complexity = TaskComplexity.HIGH
-            elif task.type in self._LOW_COMPLEXITY_TYPES:
+            desc_lower = task.description.lower()
+            desc_len = len(task.description)
+
+            # 1. Type-based default
+            if task.type in self._LOW_COMPLEXITY_TYPES:
                 task.complexity = TaskComplexity.LOW
+            elif task.type in self._CODE_REVIEW_TYPES:
+                # Sprint 3: era HIGH, agora MEDIUM por padrao
+                task.complexity = TaskComplexity.MEDIUM
             else:
-                # Default to medium, then adjust based on description
                 task.complexity = TaskComplexity.MEDIUM
 
-            # Override based on description length (stronger signal)
-            desc_len = len(task.description)
-            if desc_len <= self._SHORT_DESC_THRESHOLD and task.complexity != TaskComplexity.HIGH:
-                task.complexity = TaskComplexity.LOW
-            elif desc_len >= self._LONG_DESC_THRESHOLD and task.complexity != TaskComplexity.LOW:
+            # 2. Lexical override: keywords explicitas
+            has_low_kw = any(kw in desc_lower for kw in self._LOW_COMPLEXITY_KEYWORDS)
+            has_high_kw = any(kw in desc_lower for kw in self._HIGH_COMPLEXITY_KEYWORDS)
+            if has_high_kw and not has_low_kw:
                 task.complexity = TaskComplexity.HIGH
+            elif has_low_kw and not has_high_kw:
+                task.complexity = TaskComplexity.LOW
 
-            # Boost complexity if task depends on 3+ other tasks (integration task)
+            # 3. Length override (stronger signal — sobrescreve type default mas
+            # respeita lexical override quando ele bate na mesma direcao)
+            if desc_len <= self._SHORT_DESC_THRESHOLD:
+                if task.complexity == TaskComplexity.HIGH:
+                    # so derruba pra MEDIUM, nao pra LOW (preserva intencao do tipo)
+                    task.complexity = TaskComplexity.MEDIUM
+                elif task.complexity == TaskComplexity.MEDIUM and task.type in self._LOW_COMPLEXITY_TYPES:
+                    task.complexity = TaskComplexity.LOW
+            elif desc_len >= self._LONG_DESC_THRESHOLD:
+                if task.complexity == TaskComplexity.LOW:
+                    task.complexity = TaskComplexity.MEDIUM
+                elif task.complexity == TaskComplexity.MEDIUM:
+                    task.complexity = TaskComplexity.HIGH
+
+            # 4. Integration boost: 3+ deps -> sobe um tier
             if len(task.dependencies) >= 3:
                 if task.complexity == TaskComplexity.LOW:
                     task.complexity = TaskComplexity.MEDIUM
@@ -500,9 +569,9 @@ class Orchestrator:
                     task.complexity = TaskComplexity.HIGH
 
             logger.debug(
-                "Complexity: task '%s' (%s, %d chars, %d deps) -> %s",
+                "Complexity: task '%s' (%s, %d chars, %d deps, low_kw=%s, high_kw=%s) -> %s",
                 task.id, task.type, desc_len, len(task.dependencies),
-                task.complexity.value,
+                has_low_kw, has_high_kw, task.complexity.value,
             )
 
     # ==================================================================
@@ -541,8 +610,14 @@ class Orchestrator:
             {k: v for k, v in llm_counts.items() if v > 0}, used_llms, total,
         )
 
-        # Inject tasks for missing LLMs
-        next_id = max((int(t.id.replace("t", "")) for t in tasks if t.id.startswith("t")), default=0) + 1
+        # Inject tasks for missing LLMs.
+        # Sprint 3: parser robusto — task IDs podem ser 't1', 't10', '7_review_acentuacao' etc.
+        # Extrai apenas a parte numerica do prefixo, ignora qualquer sufixo nao-numerico.
+        def _extract_id_num(task_id: str) -> int:
+            import re as _re
+            m = _re.match(r"^t?(\d+)", task_id)
+            return int(m.group(1)) if m else 0
+        next_id = max((_extract_id_num(t.id) for t in tasks), default=0) + 1
         for llm_name in missing_llms:
             if llm_name == "perplexity":
                 inject_type = "research"

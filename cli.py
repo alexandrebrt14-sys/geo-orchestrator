@@ -181,16 +181,23 @@ def _display_summary(report: ExecutionReport) -> None:
     console.print()
     console.print(table)
 
-    # Tabela: Uso por LLM (canonico, 5 LLMs do LLM_CONFIGS)
+    # Tabela: Uso por LLM (5 canonicos). Sprint 3: tier interno Claude
+    # (claude_sonnet, claude_haiku) consolidado no slot 'claude' para
+    # mostrar familia Anthropic unificada.
     llm_stats: dict[str, dict] = {
         name: {"tasks": 0, "ok": 0, "fail": 0, "cost": 0.0, "tokens": 0, "time_ms": 0}
-        for name in LLM_CONFIGS
+        for name in ["claude", "gpt4o", "gemini", "perplexity", "groq"]
+    }
+    # Mapa para consolidar tier interno Claude no slot canonico.
+    canonical_alias = {
+        "claude_sonnet": "claude",
+        "claude_haiku": "claude",
     }
     for r in results_list:
-        bucket = r.llm_used if r.llm_used in llm_stats else None
-        # Aliases (ex.: 'semantic_cache', 'code_executor' nao contam para 5 LLMs)
-        if bucket is None:
-            continue
+        raw = r.llm_used
+        bucket = canonical_alias.get(raw, raw)
+        if bucket not in llm_stats:
+            continue  # 'semantic_cache', 'code_executor' nao contam
         llm_stats[bucket]["tasks"] += 1
         llm_stats[bucket]["ok"] += 1 if r.success else 0
         llm_stats[bucket]["fail"] += 0 if r.success else 1
@@ -610,6 +617,112 @@ def cost_report():
 
     console.print(table)
     console.print(f"\n{len(entries)} execuções registradas no total.")
+
+
+@cli.command()
+@click.option("--limit", "-n", default=20, help="Numero de runs recentes a exibir.")
+def dashboard(limit: int):
+    """Dashboard CLI dos KPIs estruturais (.kpi_history.jsonl).
+
+    Sprint 3 (2026-04-07): consome o jsonl de historico gravado pelo
+    Orchestrator a cada run e renderiza:
+    - Tabela timeseries dos ultimos N runs com distribution_health,
+      cost_estimate_accuracy, real_cost, used_llms, max_share.
+    - Card de status agregado (saudavel / atencao / drift).
+    - Alerta visual se 3 runs consecutivos saem da banda 0.7-1.5x.
+    """
+    from src.kpi_history import (
+        load_recent_entries, detect_drift,
+        ACCURACY_BAND_LOW, ACCURACY_BAND_HIGH, KPI_HISTORY_PATH,
+    )
+
+    if not KPI_HISTORY_PATH.exists():
+        console.print(
+            "[yellow]Nenhum historico de KPI encontrado em {}.[/yellow]".format(KPI_HISTORY_PATH)
+        )
+        console.print("[dim]Rode 'cli.py run' pelo menos uma vez para gerar entradas.[/dim]")
+        return
+
+    entries = load_recent_entries(n=limit)
+    if not entries:
+        console.print("[yellow]Historico vazio.[/yellow]")
+        return
+
+    table = Table(title=f"KPI History — ultimos {len(entries)} runs")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Timestamp", style="cyan", width=19)
+    table.add_column("Demanda", style="white")
+    table.add_column("Health", justify="right")
+    table.add_column("Accuracy", justify="right")
+    table.add_column("Custo", justify="right")
+    table.add_column("LLMs", justify="center")
+    table.add_column("Max%", justify="right")
+    table.add_column("Tasks", justify="right")
+
+    for i, e in enumerate(entries, start=1):
+        meta = e.get("_meta", {})
+        used = meta.get("used_llms", 0)
+        max_share = meta.get("max_share", 0)
+        health = e.get("distribution_health", 0)
+        accuracy = e.get("cost_estimate_accuracy", 0)
+
+        # Cores: verde se saudavel, amarelo atencao, vermelho ruim
+        health_color = "green" if health >= 0.95 else ("yellow" if health >= 0.8 else "red")
+        if ACCURACY_BAND_LOW <= accuracy <= ACCURACY_BAND_HIGH:
+            acc_color = "green"
+        elif 0.5 <= accuracy <= 2.0:
+            acc_color = "yellow"
+        else:
+            acc_color = "red"
+        max_color = "red" if max_share > 0.80 else ("yellow" if max_share > 0.60 else "green")
+        tasks_total = e.get("tasks_completed", 0) + e.get("tasks_failed", 0)
+        failed = e.get("tasks_failed", 0)
+        task_label = f"{tasks_total - failed}/{tasks_total}" if tasks_total else "—"
+
+        table.add_row(
+            str(i),
+            e.get("timestamp", "?")[:19],
+            e.get("demand", "")[:50] + ("…" if len(e.get("demand", "")) > 50 else ""),
+            f"[{health_color}]{health:.2f}[/{health_color}]",
+            f"[{acc_color}]{accuracy:.2f}x[/{acc_color}]",
+            f"${e.get('real_cost_usd', 0):.4f}",
+            f"{used}/5",
+            f"[{max_color}]{max_share*100:.0f}%[/{max_color}]",
+            task_label,
+        )
+
+    console.print(table)
+
+    # Drift detection
+    drift = detect_drift()
+    if drift:
+        console.print()
+        console.print(Panel(
+            f"[bold red]COST_ESTIMATE_DRIFT[/bold red] — {drift['count']} runs consecutivos fora da banda saudavel.\n"
+            f"Ultimos valores: {drift['last_values']} (media {drift['average']:.2f}x, banda {drift['band']}).\n"
+            f"[bold]Acao recomendada:[/bold] {drift['recommended_action']}",
+            title="Alerta de Drift",
+            border_style="red",
+        ))
+    else:
+        # Status agregado dos ultimos 3 runs
+        last_3 = entries[-3:] if len(entries) >= 3 else entries
+        avg_health = sum(e.get("distribution_health", 0) for e in last_3) / len(last_3)
+        avg_acc = sum(e.get("cost_estimate_accuracy", 0) for e in last_3) / len(last_3)
+        if avg_health >= 0.95 and ACCURACY_BAND_LOW <= avg_acc <= ACCURACY_BAND_HIGH:
+            status = "[green]SAUDAVEL[/green]"
+        elif avg_health >= 0.8:
+            status = "[yellow]ATENCAO[/yellow]"
+        else:
+            status = "[red]CRITICO[/red]"
+        console.print()
+        console.print(Panel(
+            f"Status agregado (ultimos {len(last_3)} runs): {status}\n"
+            f"distribution_health medio: [bold]{avg_health:.2f}[/bold] (alvo >= 0.95)\n"
+            f"cost_estimate_accuracy medio: [bold]{avg_acc:.2f}x[/bold] (banda {ACCURACY_BAND_LOW}-{ACCURACY_BAND_HIGH}x)",
+            title="Resumo",
+            border_style="cyan",
+        ))
 
 
 @cli.command()

@@ -9,6 +9,32 @@ checkpoints, quality gates e governanca FinOps.
 
 **Estado atual**: v2.0 | ~12.500 linhas de Python | 42 arquivos | 33 commits | 116+ execuções
 
+## 2026-04-07 — Sprint 3 (8 fixes + tier interno em runtime + KPI history)
+
+A sprint 3 fechou os 5 itens P0/P1/P2 do backlog publico + 3 bonus durante validacao.
+Run #5 da bateria: **US$ 0.0727** (vs US$ 0.6653 no run #1 — **−89%**), 97.5s (vs 240.8s — **−60%**),
+75/75 tests (era 51/51), 5/5 LLMs.
+
+| Fix | Status |
+|---|---|
+| #11 sanitizacao ASCII de paths (`src/sanitize.py` novo) | RESOLVIDO + 9 tests |
+| #13 decomposer marca complexity variavel | RESOLVIDO + 5 tests + RUNTIME (Haiku acionou) |
+| #14 KPI history persistido em jsonl (`src/kpi_history.py` novo) | RESOLVIDO + 4 tests |
+| #15 drift alert se 3 runs fora de banda 0.7-1.5x | RESOLVIDO + 3 tests |
+| #16 `cli.py dashboard` | RESOLVIDO + 2 tests |
+| Bonus: display Anthropic agrega Sonnet/Haiku | RESOLVIDO |
+| Bonus: race condition session_usage 2x | RESOLVIDO |
+| Bonus: parser task IDs robusto (regex) | RESOLVIDO |
+
+**Marco mais importante**: tier interno Claude (Opus/Sonnet/Haiku) acionou em runtime
+pela 1a vez. t7 review do run #5 foi para `claude_haiku` (-95% custo vs Opus).
+Decomposer refinado defaulta code/review como MEDIUM (era HIGH) e aplica lexical
+override (low_keywords/high_keywords) + thresholds maiores (180/600 chars).
+
+**Novos comandos**: `python cli.py dashboard` mostra timeseries dos KPIs persistidos
+em `output/.kpi_history.jsonl` com semaforo verde/amarelo/vermelho e drift alert
+visual quando 3 runs consecutivos saem da banda saudavel.
+
 ## 2026-04-07 — CLI religado ao Orchestrator v2.0 (refatoracao critica)
 
 A auditoria de 2026-04-07 confirmou que o `cli.py` executava um caminho legacy

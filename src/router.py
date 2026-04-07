@@ -466,7 +466,6 @@ class Router:
         # 1) Try adaptive routing first
         best = self.get_best_llm(task.type)
         if best and self._is_usable(best):
-            self.record_assignment(best)
             logger.debug(
                 "Adaptive routing: task '%s' (%s, %s) -> %s (session usage: %s)",
                 task.id, task.type, task.complexity.value, best,
@@ -483,7 +482,6 @@ class Router:
                 chosen = self._least_used_llm(top_candidates)
             else:
                 chosen = chain[0]
-            self.record_assignment(chosen)
             logger.debug(
                 "Chain routing (balanced): task '%s' (%s) -> %s (chain: %s, usage: %s)",
                 task.id, task.type, chosen, " > ".join(chain),
@@ -497,14 +495,12 @@ class Router:
             candidates = [n for n in [routing.primary, routing.fallback] if self._is_usable(n)]
             if candidates:
                 chosen = self._least_used_llm(candidates)
-                self.record_assignment(chosen)
                 return LLM_CONFIGS[chosen]
 
         # 4) Last resort: least-used available LLM
         available = [name for name in LLM_CONFIGS if self._is_usable(name)]
         if available:
             chosen = self._least_used_llm(available)
-            self.record_assignment(chosen)
             return LLM_CONFIGS[chosen]
 
         raise RuntimeError(
