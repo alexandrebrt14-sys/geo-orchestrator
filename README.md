@@ -6,9 +6,11 @@
 
 Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude Sonnet 4.5, routes each task to the most appropriate LLM (8 models across 5 providers) based on **complexity-aware tier routing** + **80% provider concentration cap** + adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, FinOps governance and **WhatsApp/email alerts** on budget thresholds.
 
-**12,500+ lines | 1,189 calls tracked | 8 models / 5 providers | unified tracking via [geo-finops](../geo-finops/)**
+**12,500+ lines | 1,189 calls tracked | 8 models / 5 providers | unified tracking via [geo-finops](https://github.com/alexandrebrt14-sys/geo-finops)**
 
-> **Updated 2026-04-07** — Migrated from single-model-per-task-type (96.7% cost concentration in Opus 4) to **tier routing by complexity** (Haiku 4.5 → Sonnet 4.5 → Opus 4.6). Added Kimi K2 + Qwen 3 32B in Groq, sonar-deep-research in Perplexity, Gemini 2.5 Pro for analysis. **Projected savings: 20-40% per execution**. Full audit history: see [docs/AUDIT_2026-04-07.md](docs/AUDIT_2026-04-07.md).
+> **Updated 2026-04-07** — Migrated from single-model-per-task-type (96.7% cost concentration in Opus 4) to **tier routing by complexity** (Haiku 4.5 → Sonnet 4.5 → Opus 4.6). Added Kimi K2 + Qwen 3 32B in Groq, sonar-deep-research in Perplexity, Gemini 2.5 Pro for analysis. **Projected savings: 20-40% per execution**. Full audit: [docs/AUDIT_2026-04-07.md](docs/AUDIT_2026-04-07.md).
+>
+> **Unified FinOps tracking** — All calls (this orchestrator + papers + curso-factory + caramaschi + landing-page-geo probes) now flow into a single SQLite local database with nightly Supabase sync. Live dashboard at https://alexandrecaramaschi.com/finops. See the standalone [`geo-finops`](https://github.com/alexandrebrt14-sys/geo-finops) repository (initial release [v1.1.0](https://github.com/alexandrebrt14-sys/geo-finops/blob/main/CHANGELOG.md)).
 
 ---
 
