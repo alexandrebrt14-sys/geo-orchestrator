@@ -4,9 +4,11 @@
 ![LLMs](https://img.shields.io/badge/LLMs-5_providers-ff6b35)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
-Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude, routes each task to the most appropriate LLM based on adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, and full FinOps governance.
+Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude Sonnet 4.5, routes each task to the most appropriate LLM (8 models across 5 providers) based on **complexity-aware tier routing** + **80% provider concentration cap** + adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, FinOps governance and **WhatsApp/email alerts** on budget thresholds.
 
-**12,500+ lines | 42 files | 33 commits | 116+ orchestrator executions**
+**12,500+ lines | 1,189 calls tracked | 8 models / 5 providers | unified tracking via [geo-finops](../geo-finops/)**
+
+> **Updated 2026-04-07** — Migrated from single-model-per-task-type (96.7% cost concentration in Opus 4) to **tier routing by complexity** (Haiku 4.5 → Sonnet 4.5 → Opus 4.6). Added Kimi K2 + Qwen 3 32B in Groq, sonar-deep-research in Perplexity, Gemini 2.5 Pro for analysis. **Projected savings: 20-40% per execution**. Full audit history: see [docs/AUDIT_2026-04-07.md](docs/AUDIT_2026-04-07.md).
 
 ---
 
@@ -31,15 +33,32 @@ Demand --> Orchestrator (Claude decomposes) --> Router (adaptive scoring)
 
 ---
 
-## 5 LLMs and Their Roles
+## 8 Models across 5 Providers (with tier routing)
 
-| Provider | Model | Role | Cost/1M tokens (in/out) | RPM |
-|---|---|---|---|---|
-| **Perplexity** | sonar | Live research with sources and citations | $1.00 / $1.00 | 20 |
-| **OpenAI** | gpt-4o | Long-form writing, copywriting, SEO, translation | $2.50 / $10.00 | 60 |
-| **Google** | gemini-2.5-pro | Deep analysis, classification, batch processing | $3.50 / $10.50 | 30 |
-| **Groq** | llama-3.3-70b-versatile | High-speed classification, rapid drafts | $0.59 / $0.79 | 300 |
-| **Anthropic** | claude-opus-4-6 | Decomposition, architecture, code, review | $15.00 / $75.00 | 60 |
+| Provider | Model | Tier / Role | Cost/1M tokens (in/out) |
+|---|---|---|---|
+| **Anthropic** | claude-opus-4-6 | premium · architecture/code complexity 4-5 | $15.00 / $75.00 |
+| **Anthropic** | claude-sonnet-4-5 | balanced · default for code/review complexity 3 | $3.00 / $15.00 |
+| **Anthropic** | claude-haiku-4-5 | economy · classification/summarization complexity 1-2 | $0.80 / $4.00 |
+| **OpenAI** | gpt-4o | writing, copywriting, SEO | $2.50 / $10.00 |
+| **Google** | gemini-2.5-pro | analysis, data_processing (always Pro, never Flash) | $1.25 / $5.00 |
+| **Perplexity** | sonar-pro | research padrao com fontes ao vivo | $3.00 / $15.00 |
+| **Perplexity** | sonar-deep-research | research multi-step para complexity 4-5 (raciocinio profundo) | $2.00 / $8.00 |
+| **Groq** | llama-3.3-70b-versatile | ultra-rapida (~10x), default para Groq tier 1-2 | $0.59 / $0.79 |
+| **Groq** | moonshotai/kimi-k2-instruct | Kimi K2 1T params, raciocinio agentic, complexity 4-5 | $1.00 / $3.00 |
+| **Groq** | qwen/qwen3-32b | multilingue, traducao primary | $0.29 / $0.59 |
+
+### Tier Routing (automatic via Router._apply_claude_tier and _apply_perplexity_tier)
+
+| Complexity | Claude family | Groq family | Perplexity family |
+|---|---|---|---|
+| 1-2 (low) | claude-haiku-4-5 | llama-3.3-70b-versatile | sonar-pro |
+| 3 (medium) | claude-sonnet-4-5 | qwen/qwen3-32b | sonar-pro |
+| 4-5 (high) | claude-opus-4-6 | moonshotai/kimi-k2-instruct | sonar-deep-research |
+
+### Provider Concentration Cap (80% default)
+
+After 5+ tasks executed in a session, if any provider exceeds its `CAP_*_SHARE` environment variable (default 0.80), the router rebalances to the first viable alternative from a different provider. Configurable per provider via `CAP_ANTHROPIC_SHARE`, `CAP_OPENAI_SHARE`, etc.
 
 ### Pipeline Role Assignment
 
