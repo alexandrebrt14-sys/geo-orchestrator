@@ -69,9 +69,10 @@ class Pipeline:
         self._results_dir.mkdir(parents=True, exist_ok=True)
 
         # Estatísticas por LLM para exibição em tempo real
+        # Inclui todos os LLMs em LLM_CONFIGS (5 canonicos + tiers internos Claude)
         self._llm_stats: dict[str, dict] = {
             name: {"assigned": 0, "completed": 0, "tokens": 0, "cost": 0.0, "status": "idle"}
-            for name in ["claude", "gpt4o", "gemini", "perplexity", "groq"]
+            for name in LLM_CONFIGS
         }
 
     # ==================================================================
@@ -543,11 +544,17 @@ class Pipeline:
         )
 
     async def _optimize_context(self, dependencies_outputs: dict[str, str]) -> str:
-        """Optimize context by summarizing long dependency outputs via Gemini Flash.
+        """Optimize context by summarizing long dependency outputs via Groq.
+
+        Reescrito 2026-04-07: Groq Llama 3.3 70B substitui Gemini 2.5 Pro porque
+        o thinking mode do Gemini consumia o budget inteiro pensando e retornava
+        finishReason=MAX_TOKENS sem texto. Groq e ultra-rapido (~10x menos
+        latencia), nao tem thinking mode, custa fracao de centavo por chamada,
+        e e o LLM canonico para summarization conforme TASK_TYPES.
 
         For outputs < threshold chars, passes directly.
-        For longer outputs, calls Gemini with a summarization prompt.
-        Falls back to truncation if Gemini is unavailable.
+        For longer outputs, calls Groq with a summarization prompt.
+        Falls back to truncation if Groq is unavailable.
         """
         parts: list[str] = []
 
@@ -556,34 +563,34 @@ class Pipeline:
                 parts.append(f"--- Resultado da tarefa '{dep_id}' ---\n{output}\n")
                 continue
 
-            # Try to summarize via Gemini (cheapest LLM)
-            gemini_cfg = LLM_CONFIGS.get("gemini")
-            if gemini_cfg and gemini_cfg.available:
+            # Try to summarize via Groq (rapido + sem thinking + canonico)
+            summarizer_cfg = LLM_CONFIGS.get("groq") or LLM_CONFIGS.get("gemini")
+            if summarizer_cfg and summarizer_cfg.available:
                 try:
-                    client = LLMClient(gemini_cfg)
+                    client = LLMClient(summarizer_cfg)
                     response = await client.query(
                         prompt=(
                             f"Resuma os pontos-chave do texto abaixo em no maximo 500 palavras. "
                             f"Mantenha dados, numeros e conclusoes importantes.\n\n{output}"
                         ),
                         system="Voce e um assistente de sumarizacao. Seja conciso e preciso.",
-                        max_tokens=1000,
+                        max_tokens=1500,
                     )
                     self.cost_tracker.record(
                         task_id=f"ctx_summary_{dep_id}",
-                        llm="gemini",
+                        llm=summarizer_cfg.name,
                         tokens_in=response.tokens_input,
                         tokens_out=response.tokens_output,
                         cost=response.cost,
                     )
                     parts.append(
-                        f"--- Resultado da tarefa '{dep_id}' (resumido) ---\n{response.text}\n"
+                        f"--- Resultado da tarefa '{dep_id}' (resumido por {summarizer_cfg.name}) ---\n{response.text}\n"
                     )
                     continue
                 except Exception as exc:
                     logger.warning(
-                        "Failed to summarize context for '%s' via Gemini: %s. Using truncation.",
-                        dep_id, exc,
+                        "Failed to summarize context for '%s' via %s: %s. Using truncation.",
+                        dep_id, summarizer_cfg.name, exc,
                     )
 
             # Fallback: simple truncation

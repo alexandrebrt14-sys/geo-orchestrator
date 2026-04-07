@@ -62,6 +62,19 @@ class Router:
         self._stats: dict = self._load_stats()
         # Session-level load balancer: tracks tasks assigned per LLM this session
         self._session_usage: dict[str, int] = {name: 0 for name in LLM_CONFIGS}
+        # Sprint 2: flag para forçar uso de todos os 5 LLMs canonicos antes de
+        # cair em tier interno. Setado por cli.py run --force-5-llm.
+        self._force_all_llms: bool = False
+
+    def set_force_all_llms(self, enabled: bool) -> None:
+        """Liga/desliga o modo force-5-llm: prioriza LLMs ainda nao usados.
+
+        Quando ativo, get_next_in_chain primeiro tenta um LLM canonico ainda
+        nao usado nesta sessao antes de seguir o roteamento padrao. Util
+        para QA, demos e demandas onde a cobertura dos 5 LLMs e requisito.
+        """
+        self._force_all_llms = enabled
+        logger.info("Router._force_all_llms = %s", enabled)
 
     def record_assignment(self, llm_name: str) -> None:
         """Track that an LLM was assigned a task in this session."""
@@ -358,6 +371,35 @@ class Router:
         future_share = (self._session_usage.get(llm_name, 0) + 1) / (total + 1)
         return future_share > CONCENTRATION_CAP
 
+    def downgrade_claude_by_complexity(self, name: str, task: Task) -> str:
+        """Downgrade automatico Claude Opus -> Sonnet/Haiku por complexity.
+
+        Adicionado 2026-04-07 (sprint 2). Mantem familia Claude (qualidade
+        de raciocinio similar) mas usa o tier de custo certo:
+        - low    -> claude_haiku  (~19x mais barato)
+        - medium -> claude_sonnet (~5x mais barato)
+        - high   -> claude (Opus, mantido)
+
+        So aplica downgrade se a alternativa estiver disponivel
+        (api key valida + nao rate-limited). Caso contrario mantem Opus.
+        """
+        if name != "claude":
+            return name
+        complexity = task.complexity.value if hasattr(task.complexity, "value") else str(task.complexity)
+        if complexity == "low" and self._is_usable("claude_haiku"):
+            logger.info(
+                "CLAUDE TIER: task '%s' (low complexity) Opus -> Haiku (-95%% custo)",
+                task.id,
+            )
+            return "claude_haiku"
+        if complexity == "medium" and self._is_usable("claude_sonnet"):
+            logger.info(
+                "CLAUDE TIER: task '%s' (medium complexity) Opus -> Sonnet (-80%% custo)",
+                task.id,
+            )
+            return "claude_sonnet"
+        return name  # high stays Opus
+
     def apply_concentration_cap(
         self, chosen: str, chain: list[str]
     ) -> str:
@@ -501,9 +543,23 @@ class Router:
         if not valid:
             return None
 
-        # Primeira tentativa: aplica cap e registra
+        # Primeira tentativa: aplica cap, downgrade Claude por complexity, registra
         if not tried:
             chosen = self.apply_concentration_cap(valid[0], valid)
+            chosen = self.downgrade_claude_by_complexity(chosen, task)
+            # force_all override (sprint 2): se setado, prefere LLM ainda nao usado
+            if getattr(self, "_force_all_llms", False):
+                unused = self.get_unused_models()
+                if unused and chosen not in unused:
+                    # Pega o primeiro unused que esteja na chain valida
+                    for cand in valid:
+                        if cand in unused:
+                            logger.info(
+                                "FORCE-5-LLM: task '%s' redirecionado de '%s' para '%s' (forcando cobertura)",
+                                task.id, chosen, cand,
+                            )
+                            chosen = cand
+                            break
             self.record_assignment(chosen)
             return LLM_CONFIGS[chosen]
 

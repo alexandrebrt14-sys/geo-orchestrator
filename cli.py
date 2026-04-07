@@ -315,7 +315,8 @@ def cli():
 @click.option("--output-dir", type=click.Path(), default="output", help="Diretorio para salvar resultados.")
 @click.option("--force", is_flag=True, help="Ignora o budget guard (BUDGET_LIMIT).")
 @click.option("--no-smart", is_flag=True, help="Desliga o SmartRouter (debug; usa Router classico).")
-def run(demand: str, dry_run: bool, verbose: bool, output_dir: str, force: bool, no_smart: bool):
+@click.option("--force-5-llm", "force_5_llm", is_flag=True, help="Forca uso dos 5 LLMs canonicos antes de fallback (QA/demos).")
+def run(demand: str, dry_run: bool, verbose: bool, output_dir: str, force: bool, no_smart: bool, force_5_llm: bool):
     """Executa o pipeline v2.0 completo para uma demanda.
 
     Caminho v2.0 (Orchestrator): SmartRouter + cap 80% + quality gates +
@@ -352,7 +353,7 @@ def run(demand: str, dry_run: bool, verbose: bool, output_dir: str, force: bool,
     # Modo dry-run: usa apenas Orchestrator.decompose para mostrar o plano
     if dry_run:
         console.print("[bold cyan]Dry-run:[/bold cyan] decompondo demanda via Orchestrator...\n")
-        orch = Orchestrator(force=force, smart=not no_smart)
+        orch = Orchestrator(force=force, smart=not no_smart, force_all_llms=force_5_llm)
         plan_obj = asyncio.run(orch.decompose(demand))
         _display_plan(plan_obj)
 
@@ -369,7 +370,9 @@ def run(demand: str, dry_run: bool, verbose: bool, output_dir: str, force: bool,
 
     # Execucao completa via Orchestrator v2.0
     console.print("[bold cyan]Pipeline v2.0:[/bold cyan] PromptRefiner -> Decompose -> SmartRouter -> CodeFirst -> Cache -> Pipeline (cap 80% + quality + fallback)\n")
-    orch = Orchestrator(force=force, smart=not no_smart)
+    if force_5_llm:
+        console.print("[bold yellow]--force-5-llm ativo:[/bold yellow] router prioriza LLMs canonicos ainda nao usados\n")
+    orch = Orchestrator(force=force, smart=not no_smart, force_all_llms=force_5_llm)
     try:
         report: ExecutionReport = asyncio.run(orch.run(demand))
     except Exception as exc:

@@ -81,6 +81,15 @@ REGRAS DE FEEDBACK SOCIAL (baseadas em Jaques, Social RL):
 - A tarefa de review DEVE verificar: acentuação, estilo de escrita, economia de tokens.
 - Se o revisor encontrar problemas, o output deve incluir "needs_revision" + instruções.
 
+REGRAS DE PARALELIZAÇÃO DE REVIEW (sprint 2 — 2026-04-07):
+- Quando a demanda exigir review final, decomponha em até 3 sub-reviews PARALELOS:
+  * review_acentuacao → classification (Groq, ~1s) — verifica só acentuação PT-BR
+  * review_codigo → review (Claude, ~10s) — verifica só código gerado
+  * review_estilo → analysis (Gemini, ~5s) — verifica tom, clareza, redundância
+- Estes 3 NÃO dependem entre si (mesma wave) — paraleliza wall clock total.
+- Use complexity baixa em sub-reviews (low/medium) para que tier interno
+  Claude downgrade para Sonnet/Haiku quando aplicavel.
+
 Tipos disponíveis: research, analysis, writing, copywriting, code, review, \
 seo, data_processing, fact_check, classification, translation, summarization.
 
@@ -123,10 +132,12 @@ class Orchestrator:
     and enhanced execution reporting.
     """
 
-    def __init__(self, *, force: bool = False, smart: bool = True) -> None:
+    def __init__(self, *, force: bool = False, smart: bool = True, force_all_llms: bool = False) -> None:
         self._smart_mode = smart
         self._router = SmartRouter() if smart else Router()
         self.router = self._router  # alias for pipeline compatibility
+        if force_all_llms:
+            self._router.set_force_all_llms(True)
         self._claude_cfg = LLM_CONFIGS["claude"]
         self._force = force  # bypass budget confirmation
         self._cache_dir = OUTPUT_DIR / ".cache"

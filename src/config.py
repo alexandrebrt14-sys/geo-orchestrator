@@ -123,6 +123,32 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         max_tokens=8192,
         role="Velocista. Inferencia ultra-rapida (~10x mais rapido que outros). Ideal para tarefas que precisam de velocidade: triagem, classificacao, traducao, resumos rapidos, code review leve.",
     ),
+    # Tier interno Claude (adicionado 2026-04-07 sprint 2):
+    # downgrade automatico via Router._downgrade_claude_by_complexity.
+    # Mantem familia Claude (mesma qualidade de raciocinio) mas no tier
+    # de custo certo para complexity low/medium.
+    "claude_sonnet": LLMConfig(
+        name="claude_sonnet",
+        provider=Provider.ANTHROPIC,
+        model="claude-sonnet-4-6",
+        api_key_env="ANTHROPIC_API_KEY",
+        strengths=["balanced_reasoning", "code_review", "writing_long_form", "moderate_architecture"],
+        cost_per_1k_input=0.003,
+        cost_per_1k_output=0.015,
+        max_tokens=8192,
+        role="Sonnet 4.6 — tier intermediario da familia Claude. 5x mais barato que Opus, mantendo 90%+ da qualidade para tarefas medium-complexity.",
+    ),
+    "claude_haiku": LLMConfig(
+        name="claude_haiku",
+        provider=Provider.ANTHROPIC,
+        model="claude-haiku-4-5",
+        api_key_env="ANTHROPIC_API_KEY",
+        strengths=["fast_inference", "classification", "summarization", "simple_code"],
+        cost_per_1k_input=0.0008,
+        cost_per_1k_output=0.004,
+        max_tokens=8192,
+        role="Haiku 4.5 — tier mais barato da familia Claude. ~19x mais barato que Opus, ideal para low-complexity (triagem, classificacao, summarization).",
+    ),
 }
 
 
