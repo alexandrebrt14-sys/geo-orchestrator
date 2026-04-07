@@ -164,7 +164,7 @@ class QualityJudge:
                 system="Você é um avaliador de qualidade rigoroso. Responda apenas em JSON válido.",
                 max_tokens=1000,
             )
-            raw_text = response.content
+            raw_text = response.text  # LLMResponse expoe .text (corrigido 2026-04-07)
         except Exception as exc:
             logger.error("Erro ao chamar LLM judge: %s", exc)
             return self._build_default_score(f"Erro na chamada ao judge: {exc}")

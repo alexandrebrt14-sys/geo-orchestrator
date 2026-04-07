@@ -351,7 +351,22 @@ class LLMClient:
         resp.raise_for_status()
         data = resp.json()
 
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        # Parser robusto: Gemini pode retornar candidates sem parts em
+        # finishReason=MAX_TOKENS / SAFETY / RECITATION. Fallback gracioso.
+        try:
+            candidates = data.get("candidates") or []
+            if not candidates:
+                raise ValueError(f"Gemini sem candidates. finishReason={data.get('promptFeedback')}")
+            content = candidates[0].get("content") or {}
+            parts = content.get("parts") or []
+            if not parts:
+                finish = candidates[0].get("finishReason", "UNKNOWN")
+                raise ValueError(f"Gemini sem parts (finishReason={finish}, schema={list(candidates[0].keys())})")
+            text = parts[0].get("text", "")
+            if not text:
+                raise ValueError(f"Gemini retornou parts vazias: {parts[0]}")
+        except (KeyError, IndexError, ValueError) as exc:
+            raise RuntimeError(f"Resposta Gemini com schema inesperado: {exc}") from exc
         usage = data.get("usageMetadata", {})
         tokens_in = usage.get("promptTokenCount", 0)
         tokens_out = usage.get("candidatesTokenCount", 0)

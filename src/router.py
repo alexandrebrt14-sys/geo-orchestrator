@@ -34,6 +34,15 @@ _FAILURE_THRESHOLD = 0.30
 # Minimum number of samples before we trust the stats
 _MIN_SAMPLES = 3
 
+# Concentration cap: maximum share (0.0-1.0) of tasks that any single provider
+# can take in a session. Once a provider exceeds this share, the router
+# redirects subsequent tasks to alternatives. Critical for cost balance.
+CONCENTRATION_CAP: float = 0.80
+
+# Minimum task count before the cap kicks in (avoids penalizing the very first
+# task which trivially is at 100% of 1 task).
+CAP_MIN_TASKS: int = 3
+
 
 class Router:
     """Route tasks to the most suitable LLM based on task type, complexity,
@@ -285,27 +294,20 @@ class Router:
     def get_fallback_chain(self, task: Task) -> list[str]:
         """Return the full fallback chain for a task, filtered by availability.
 
-        Order: complexity-tier preferred LLMs first, then the task-type chain,
-        deduplicated while preserving order.
+        ORDER (reviewed 2026-04-07 — fix critico do refator/cli-orchestrator-v2):
+        1. TASK_TYPES.primary  (LLM canonico do task type — research->perplexity, etc.)
+        2. TASK_TYPES.fallback (fallback canonico)
+        3. FALLBACK_CHAINS[task_type] (cadeia estruturada por task type)
+        4. Complexity-tier candidates (so como fallback de ultima instancia)
+        5. Qualquer LLM disponivel (rede de seguranca)
+
+        Antes (bug): tier de complexity 'high' = [claude, gpt4o] vinha primeiro,
+        sequestrando 100% das tarefas de research/writing/analysis para Claude.
         """
         seen: set[str] = set()
         chain: list[str] = []
 
-        # 1) Complexity-tier candidates
-        tier_candidates = self._get_tier_candidates(task.complexity)
-        for name in tier_candidates:
-            if name not in seen and self._is_usable(name):
-                chain.append(name)
-                seen.add(name)
-
-        # 2) Task-type fallback chain
-        type_chain = FALLBACK_CHAINS.get(task.type, [])
-        for name in type_chain:
-            if name not in seen and self._is_usable(name):
-                chain.append(name)
-                seen.add(name)
-
-        # 3) Static primary/fallback as safety net
+        # 1+2) TASK_TYPES.primary e fallback PRIMEIRO
         routing = TASK_TYPES.get(task.type)
         if routing:
             for name in [routing.primary, routing.fallback]:
@@ -313,13 +315,85 @@ class Router:
                     chain.append(name)
                     seen.add(name)
 
-        # 4) Any remaining available LLM
+        # 3) Cadeia estruturada FALLBACK_CHAINS por task type
+        type_chain = FALLBACK_CHAINS.get(task.type, [])
+        for name in type_chain:
+            if name not in seen and self._is_usable(name):
+                chain.append(name)
+                seen.add(name)
+
+        # 4) Complexity-tier candidates (depois — usado quando task type nao tem rota canonica)
+        tier_candidates = self._get_tier_candidates(task.complexity)
+        for name in tier_candidates:
+            if name not in seen and self._is_usable(name):
+                chain.append(name)
+                seen.add(name)
+
+        # 5) Qualquer LLM disponivel (rede de seguranca)
         for name in LLM_CONFIGS:
             if name not in seen and self._is_usable(name):
                 chain.append(name)
                 seen.add(name)
 
         return chain
+
+    # ------------------------------------------------------------------
+    # Concentration cap (NOVO 2026-04-07 — antes era vaporware)
+    # ------------------------------------------------------------------
+
+    def _current_share(self, llm_name: str) -> float:
+        """Share atual deste LLM em relacao ao total de tarefas atribuidas na sessao."""
+        total = sum(self._session_usage.values())
+        if total == 0:
+            return 0.0
+        return self._session_usage.get(llm_name, 0) / total
+
+    def _would_exceed_cap(self, llm_name: str) -> bool:
+        """Verifica se atribuir mais uma tarefa a este LLM o levaria a exceder
+        o CONCENTRATION_CAP. Cap so vale a partir de CAP_MIN_TASKS tarefas totais.
+        """
+        total = sum(self._session_usage.values())
+        if total < CAP_MIN_TASKS:
+            return False  # ainda nao ha tasks suficientes para o cap fazer sentido
+        future_share = (self._session_usage.get(llm_name, 0) + 1) / (total + 1)
+        return future_share > CONCENTRATION_CAP
+
+    def apply_concentration_cap(
+        self, chosen: str, chain: list[str]
+    ) -> str:
+        """Se o LLM escolhido excederia o cap, redireciona para a proxima
+        alternativa viavel da chain que NAO o excederia.
+
+        Retorna o nome do LLM final (chosen ou redirect).
+        Se nenhum LLM da chain estiver abaixo do cap, mantem o chosen original
+        e loga warning (cap nao pode ser respeitado dadas as constraints).
+        """
+        if not self._would_exceed_cap(chosen):
+            return chosen
+
+        # Procura alternativa viavel: dentro da chain, em ordem
+        for alt in chain:
+            if alt == chosen:
+                continue
+            if not self._is_usable(alt):
+                continue
+            if self._would_exceed_cap(alt):
+                continue
+            logger.info(
+                "CAP %.0f%% acionado: '%s' redirecionado para '%s' "
+                "(usage atual: %s)",
+                CONCENTRATION_CAP * 100, chosen, alt,
+                self._session_usage,
+            )
+            return alt
+
+        # Nenhuma alternativa abaixo do cap — fora do nosso controle
+        logger.warning(
+            "CAP %.0f%% NAO pode ser respeitado: todas as alternativas tambem "
+            "excederiam o cap. Mantendo '%s' (usage: %s).",
+            CONCENTRATION_CAP * 100, chosen, self._session_usage,
+        )
+        return chosen
 
     # ------------------------------------------------------------------
     # Core routing
@@ -415,9 +489,23 @@ class Router:
         """Return the next untried LLM from the fallback chain.
 
         Used for iterating through the full chain on repeated failures.
+        Aplica concentration cap (80%) automaticamente na PRIMEIRA tentativa
+        da tarefa: se o primeiro candidato exceder o cap, redireciona para
+        a primeira alternativa abaixo do cap.
+
+        Retentativas (len(tried) > 0) NAO aplicam cap nem record_assignment
+        novamente — sao continuacao da mesma tarefa, ja contabilizada.
         """
         chain = self.get_fallback_chain(task)
-        for name in chain:
-            if name not in tried and self._is_usable(name):
-                return LLM_CONFIGS[name]
-        return None
+        valid = [name for name in chain if name not in tried and self._is_usable(name)]
+        if not valid:
+            return None
+
+        # Primeira tentativa: aplica cap e registra
+        if not tried:
+            chosen = self.apply_concentration_cap(valid[0], valid)
+            self.record_assignment(chosen)
+            return LLM_CONFIGS[chosen]
+
+        # Retentativa: usa proximo da chain, sem nova contabilidade
+        return LLM_CONFIGS[valid[0]]

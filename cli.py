@@ -470,8 +470,13 @@ def resume(checkpoint: str, no_smart: bool, output_dir: str):
 
 
 @cli.command()
-def status():
-    """Mostra LLMs canonicos (LLM_CONFIGS) e seu status — alem do FinOps diario."""
+@click.option("--ping", is_flag=True, help="Faz uma chamada minima a cada LLM para validar model_id e API key.")
+def status(ping: bool):
+    """Mostra LLMs canonicos (LLM_CONFIGS) e seu status — alem do FinOps diario.
+
+    Com --ping faz um smoke test live em cada um dos 5 LLMs (1 token cada,
+    custo desprezivel) — pega model_id invalidos antes da execucao.
+    """
     table = Table(title="Status dos LLMs (canonicos)")
     table.add_column("LLM", style="cyan")
     table.add_column("Modelo")
@@ -493,6 +498,53 @@ def status():
             status_str,
         )
     console.print(table)
+
+    # Smoke test live de model IDs (--ping)
+    if ping:
+        from src.llm_client import LLMClient
+        console.print("\n[bold cyan]Smoke test live (--ping):[/bold cyan] 1 token por LLM")
+        ping_table = Table(show_lines=False)
+        ping_table.add_column("LLM", style="bold")
+        ping_table.add_column("Model ID")
+        ping_table.add_column("Resultado")
+        ping_table.add_column("Latencia")
+
+        async def _ping_one(name: str, cfg) -> tuple[str, str, str]:
+            import time as _t
+            t0 = _t.perf_counter()
+            try:
+                client = LLMClient(cfg)
+                # max_tokens=200 acomoda thinking budget default do Gemini 2.5 Pro
+                resp = await client.query(prompt="Responda apenas: ok", system="", max_tokens=200)
+                dt = (_t.perf_counter() - t0) * 1000
+                return ("[green]OK[/green]", f"{int(dt)}ms", "")
+            except Exception as exc:
+                dt = (_t.perf_counter() - t0) * 1000
+                msg = str(exc)[:80]
+                return ("[red]FALHA[/red]", f"{int(dt)}ms", msg)
+
+        async def _ping_all():
+            results = {}
+            for name, cfg in LLM_CONFIGS.items():
+                if not _check_api_key(cfg.api_key_env):
+                    results[name] = ("[yellow]SEM CHAVE[/yellow]", "-", "")
+                    continue
+                results[name] = await _ping_one(name, cfg)
+            return results
+
+        ping_results = asyncio.run(_ping_all())
+        any_fail = False
+        for name, cfg in LLM_CONFIGS.items():
+            status_str, latency, err = ping_results.get(name, ("?", "-", ""))
+            ping_table.add_row(name, cfg.model, status_str, latency)
+            if "FALHA" in status_str:
+                any_fail = True
+                console.print(f"  [red]>>[/red] {name}: {err}")
+        console.print(ping_table)
+        if any_fail:
+            console.print("\n[red]Atencao: 1 ou mais LLMs falharam no smoke test. Verifique model_id e API keys antes de executar 'cli.py run'.[/red]")
+        else:
+            console.print("\n[green]Todos os LLMs canonicos passaram no smoke test.[/green]")
 
     # Pre-aviso FinOps: providers proximos do limite diario (gap fechado pela refatoracao)
     try:
