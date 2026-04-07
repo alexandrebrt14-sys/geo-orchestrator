@@ -16,29 +16,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
 import click
-import httpx
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 from rich.tree import Tree
 
-from src.agents.base import TaskType, TaskResult, format_context_from_results
-from src.agents.researcher import ResearcherAgent
-from src.agents.writer import WriterAgent, WritingMode
-from src.agents.architect import ArchitectAgent
-from src.agents.analyzer import AnalyzerAgent
-from src.agents.groq_agent import GroqAgent
 from src.finops import FinOps, get_finops
-from src.templates.decomposition import DECOMPOSITION_PROMPT
+from src.orchestrator import Orchestrator
+from src.pipeline import Pipeline
+from src.router import Router
+from src.smart_router import SmartRouter
+from src.models import ExecutionReport, Plan, TaskResult
+from src.config import LLM_CONFIGS
 
 load_dotenv()
 
@@ -50,95 +47,10 @@ if sys.platform == "win32":
 console = Console(force_terminal=True)
 
 # ---------------------------------------------------------------------------
-# Configuração de modelos
+# Constantes (modelos e tier routing vivem em src/config.py — LLM_CONFIGS)
 # ---------------------------------------------------------------------------
-MODELS = {
-    "perplexity": {
-        "name": "sonar-pro",
-        "provider": "Perplexity",
-        "env_key": "PERPLEXITY_API_KEY",
-        "tasks": ["research"],
-        "cost_1k_in": 0.003,
-        "cost_1k_out": 0.015,
-    },
-    "gpt4o": {
-        "name": "gpt-4o",
-        "provider": "OpenAI",
-        "env_key": "OPENAI_API_KEY",
-        "tasks": ["writing"],
-        "cost_1k_in": 0.0025,
-        "cost_1k_out": 0.01,
-    },
-    "claude-opus": {
-        "name": "claude-opus-4-20250514",
-        "provider": "Anthropic",
-        "env_key": "ANTHROPIC_API_KEY",
-        "tasks": ["architecture", "code_generation", "review"],
-        "cost_1k_in": 0.015,
-        "cost_1k_out": 0.075,
-    },
-    "gemini-flash": {
-        "name": "gemini-2.5-flash",
-        "provider": "Google",
-        "env_key": "GOOGLE_AI_API_KEY",
-        "tasks": ["analysis", "data_processing"],
-        "cost_1k_in": 0.00015,
-        "cost_1k_out": 0.0006,
-    },
-    "groq": {
-        "name": "llama-3.3-70b-versatile",
-        "provider": "Groq",
-        "env_key": "GROQ_API_KEY",
-        "tasks": ["classification", "summarization", "translation"],
-        "cost_1k_in": 0.00059,
-        "cost_1k_out": 0.00079,
-    },
-}
-
 COST_LOG_PATH = Path("output/cost_history.jsonl")
 REPORT_DIR = Path("output")
-
-# Mapeamento tipo de tarefa → modelo + provider para narração
-TASK_MODEL_MAP = {
-    "research": ("sonar-pro", "Perplexity", "magenta"),
-    "analysis": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
-    "writing": ("gpt-4o", "OpenAI", "green"),
-    "copywriting": ("gpt-4o", "OpenAI", "green"),
-    "seo": ("gpt-4o", "OpenAI", "green"),
-    "translation": ("gpt-4o", "OpenAI", "green"),
-    "architecture": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
-    "code_generation": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
-    "review": ("claude-opus-4-6", "Anthropic/Claude", "blue"),
-    "data_processing": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
-    "classification": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
-    "summarization": ("gemini-2.5-flash", "Google/Gemini", "yellow"),
-    "fact_check": ("sonar-pro", "Perplexity", "magenta"),
-    "deploy": ("local", "Execução Local", "white"),
-}
-
-
-def _narrate_task(task_def: dict, phase: str = "start") -> None:
-    """Narra qual modelo está executando cada tarefa — sempre visível."""
-    task_type = task_def.get("type", "unknown")
-    model, provider, color = TASK_MODEL_MAP.get(task_type, ("unknown", "Unknown", "white"))
-    task_id = task_def.get("id", "?")
-    title = task_def.get("title", "")
-
-    if phase == "start":
-        console.print(
-            f"  [{color}][{provider}/{model}][/{color}] "
-            f"[bold]{task_id}[/bold]: {title}"
-        )
-    elif phase == "done":
-        console.print(
-            f"  [{color}][{provider}/{model}][/{color}] "
-            f"[bold]{task_id}[/bold]: [green]concluída[/green]"
-        )
-    elif phase == "fail":
-        console.print(
-            f"  [{color}][{provider}/{model}][/{color}] "
-            f"[bold]{task_id}[/bold]: [red]falhou[/red]"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -148,236 +60,85 @@ def _check_api_key(env_key: str) -> bool:
     return bool(os.getenv(env_key))
 
 
-def _get_httpx_client(provider: str, timeout: float = 300.0) -> httpx.AsyncClient:
-    """Retorna um cliente httpx configurado para o provider."""
-    headers: dict[str, str] = {}
+# Mapa LLM canonico (LLM_CONFIGS) -> rotulo de provider para narrativa.
+_LLM_PROVIDER_LABEL: dict[str, str] = {
+    "claude":     "Anthropic/Claude",
+    "gpt4o":      "OpenAI/GPT-4o",
+    "gemini":     "Google/Gemini",
+    "perplexity": "Perplexity/Sonar",
+    "groq":       "Groq/Llama",
+}
 
-    if provider == "Perplexity":
-        headers["Authorization"] = f"Bearer {os.getenv('PERPLEXITY_API_KEY', '')}"
-    elif provider == "OpenAI":
-        headers["Authorization"] = f"Bearer {os.getenv('OPENAI_API_KEY', '')}"
-    elif provider == "Anthropic":
-        headers["x-api-key"] = os.getenv("ANTHROPIC_API_KEY", "")
-        headers["anthropic-version"] = "2023-06-01"
-    elif provider == "Google":
-        # Gemini usa query param com GOOGLE_AI_API_KEY, não header
-        pass
-    elif provider == "Groq":
-        headers["Authorization"] = f"Bearer {os.getenv('GROQ_API_KEY', '')}"
-
-    return httpx.AsyncClient(headers=headers, timeout=timeout)
+_LLM_COLOR: dict[str, str] = {
+    "claude":     "blue",
+    "gpt4o":      "green",
+    "gemini":     "yellow",
+    "perplexity": "magenta",
+    "groq":       "cyan",
+}
 
 
-def _create_agent(task_type: str, writing_mode: str = "article"):
-    """Cria o agente apropriado para o tipo de tarefa."""
-    if task_type in ("research",):
-        cfg = MODELS["perplexity"]
-        client = _get_httpx_client("Perplexity")
-        return ResearcherAgent(client, model_name=cfg["name"])
-
-    elif task_type in ("writing",):
-        cfg = MODELS["gpt4o"]
-        client = _get_httpx_client("OpenAI")
-        mode = WritingMode(writing_mode) if writing_mode in WritingMode.__members__.values() else WritingMode.ARTICLE
-        return WriterAgent(client, model_name=cfg["name"], writing_mode=mode)
-
-    elif task_type in ("architecture", "code_generation", "review"):
-        cfg = MODELS["claude-opus"]
-        client = _get_httpx_client("Anthropic")
-        return ArchitectAgent(client, model_name=cfg["name"])
-
-    elif task_type in ("analysis", "data_processing"):
-        cfg = MODELS["gemini-flash"]
-        client = _get_httpx_client("Google")
-        return AnalyzerAgent(client, model_name=cfg["name"])
-
-    elif task_type in ("classification", "summarization", "translation"):
-        cfg = MODELS["groq"]
-        client = _get_httpx_client("Groq")
-        return GroqAgent(client, model_name=cfg["name"])
-
-    else:
-        raise ValueError(f"Tipo de tarefa desconhecido: {task_type}")
+def _compute_waves_from_plan(plan: Plan) -> list[list]:
+    """Calcula waves de execucao via dependencias topologicas (mesmo algoritmo do Pipeline)."""
+    task_map = {t.id: t for t in plan.tasks}
+    completed: set[str] = set()
+    waves: list[list] = []
+    remaining = set(task_map.keys())
+    while remaining:
+        wave = [
+            task_map[tid]
+            for tid in remaining
+            if all(dep in completed for dep in task_map[tid].dependencies)
+        ]
+        if not wave:
+            wave = [task_map[tid] for tid in remaining]
+            waves.append(wave)
+            break
+        waves.append(wave)
+        for t in wave:
+            completed.add(t.id)
+            remaining.discard(t.id)
+    return waves
 
 
-async def _decompose_demand(demand: str) -> dict:
-    """Usa Claude para decompor a demanda em tarefas."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        console.print("[red]ANTHROPIC_API_KEY não configurada. Necessária para decomposição.[/red]")
-        sys.exit(1)
-
-    async with httpx.AsyncClient(
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-        timeout=60.0,
-    ) as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 4096,
-                "system": DECOMPOSITION_PROMPT,
-                "messages": [{"role": "user", "content": demand}],
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    content = ""
-    for block in data.get("content", []):
-        if block["type"] == "text":
-            content += block["text"]
-
-    # Limpar markdown wrapping se presente
-    content = content.strip()
-    if content.startswith("```json"):
-        content = content[7:]
-    elif content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-    content = content.strip()
-
-    if not content:
-        console.print("[red]Erro: resposta vazia da API de decomposição.[/red]")
-        sys.exit(1)
-
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        # Tentar extrair JSON de dentro do texto
-        import re
-        match = re.search(r'\{[\s\S]*\}', content)
-        if match:
-            return json.loads(match.group())
-        console.print(f"[red]Erro ao parsear JSON da decomposição: {e}[/red]")
-        console.print(f"[dim]Conteúdo recebido (primeiros 500 chars):[/dim]\n{content[:500]}")
-        sys.exit(1)
-
-
-def _display_plan(plan: dict) -> None:
-    """Exibe o plano de execução formatado."""
+def _display_plan(plan: Plan) -> None:
+    """Exibe o plano de execucao (Plan v2.0) em forma de arvore por waves."""
     console.print()
     console.print(Panel(
-        f"[bold]{plan['demand_summary']}[/bold]\n\n"
-        f"Tarefas: {plan['total_tasks']}  |  "
-        f"Custo estimado: US$ {plan.get('estimated_total_cost_usd', '?')}  |  "
-        f"Tempo estimado: {plan.get('estimated_duration_minutes', '?')} min",
-        title="Plano de Execução",
+        f"[bold]{plan.demand[:200]}[/bold]\n\n"
+        f"Tarefas: {len(plan.tasks)}  |  "
+        f"Custo estimado (decomposicao): US$ {plan.total_estimated_cost:.4f}",
+        title="Plano de Execucao (v2.0)",
         border_style="cyan",
     ))
 
-    # Árvore de tarefas por grupo paralelo
+    waves = _compute_waves_from_plan(plan)
     tree = Tree("[bold cyan]Pipeline[/bold cyan]")
-    for group in plan.get("execution_plan", {}).get("parallel_groups", []):
-        group_branch = tree.add(
-            f"[bold yellow]Grupo {group['group']}[/bold yellow] — {group['description']}"
+    for idx, wave in enumerate(waves, start=1):
+        wave_branch = tree.add(
+            f"[bold yellow]Wave {idx}[/bold yellow] — {len(wave)} tarefa(s) paralelas"
         )
-        for task_id in group["tasks"]:
-            task = next((t for t in plan["tasks"] if t["id"] == task_id), None)
-            if task:
-                dep_str = f" (depende de: {', '.join(task['dependencies'])})" if task["dependencies"] else ""
-                group_branch.add(
-                    f"[green]{task['id']}[/green] [{task['type']}] "
-                    f"{task['title']}{dep_str} "
-                    f"(complexidade: {task['complexity']}, ~US$ {task.get('estimated_cost_usd', '?')})"
-                )
-
+        for task in wave:
+            dep_str = f" (depende de: {', '.join(task.dependencies)})" if task.dependencies else ""
+            wave_branch.add(
+                f"[green]{task.id}[/green] [{task.type}] "
+                f"{task.description[:80]}{'...' if len(task.description) > 80 else ''}"
+                f"{dep_str} "
+                f"(complexidade: {task.complexity.value})"
+            )
     console.print(tree)
     console.print()
 
 
-async def _execute_plan(plan: dict, verbose: bool = False, output_dir: Path = REPORT_DIR) -> list[TaskResult]:
-    """Executa o plano de tarefas respeitando dependências e paralelismo."""
-    results: dict[str, TaskResult] = {}
-    all_results: list[TaskResult] = []
+def _display_summary(report: ExecutionReport) -> None:
+    """Exibe resumo da ExecutionReport (v2.0): tabela de tarefas + uso por LLM + cobertura."""
+    plan_task_types = {t.id: t.type for t in report.plan.tasks}
+    results_list = list(report.results.values())
 
-    groups = plan.get("execution_plan", {}).get("parallel_groups", [])
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        for group in groups:
-            group_desc = f"Grupo {group['group']}: {group['description']}"
-            pg_task = progress.add_task(group_desc, total=len(group["tasks"]))
-
-            # Preparar tarefas do grupo para execução paralela
-            async def run_task(task_def: dict) -> TaskResult:
-                task_type = task_def["type"]
-                task_id = task_def["id"]
-
-                # Narrar qual modelo executa — sempre visível
-                _narrate_task(task_def, "start")
-
-                # Montar contexto das dependências
-                dep_results = [results[dep_id] for dep_id in task_def.get("dependencies", []) if dep_id in results]
-                context = format_context_from_results(dep_results)
-
-                # Pular tarefas do tipo deploy (execução local)
-                if task_type == "deploy":
-                    _narrate_task(task_def, "done")
-                    return TaskResult(
-                        task_id=task_id,
-                        task_type=TaskType.DEPLOY,
-                        agent_name="LocalDeploy",
-                        model_used="local",
-                        success=True,
-                        output={"message": "Deploy deve ser executado manualmente via geo.sh"},
-                    )
-
-                agent = _create_agent(task_type)
-                result = await agent.execute(
-                    task=task_def["description"],
-                    context=context,
-                    task_id=task_id,
-                )
-                return result
-
-            # Executar tarefas do grupo em paralelo
-            tasks_in_group = [t for t in plan["tasks"] if t["id"] in group["tasks"]]
-            group_results = await asyncio.gather(
-                *(run_task(t) for t in tasks_in_group),
-                return_exceptions=True,
-            )
-
-            for task_def, result in zip(tasks_in_group, group_results):
-                if isinstance(result, Exception):
-                    result = TaskResult(
-                        task_id=task_def["id"],
-                        task_type=TaskType(task_def["type"]) if task_def["type"] in TaskType.__members__.values() else TaskType.ANALYSIS,
-                        agent_name="Error",
-                        model_used="none",
-                        success=False,
-                        error=str(result),
-                    )
-                results[task_def["id"]] = result
-                all_results.append(result)
-                progress.advance(pg_task)
-
-                # Sempre narrar resultado por modelo
-                _narrate_task(task_def, "done" if result.success else "fail")
-                model_info = TASK_MODEL_MAP.get(task_def["type"], ("?", "?", "white"))
-                console.print(
-                    f"    [dim]{result.duration_seconds:.1f}s | "
-                    f"{result.tokens_input} > {result.tokens_output} tokens | "
-                    f"US$ {result.cost_usd:.4f}[/dim]"
-                )
-
-    return all_results
-
-
-def _display_summary(results: list[TaskResult]) -> None:
-    """Exibe resumo de custos e resultados."""
-    table = Table(title="Resumo da Execução")
+    table = Table(title="Resumo da Execucao")
     table.add_column("Tarefa", style="cyan")
-    table.add_column("Agente", style="green")
-    table.add_column("Modelo")
+    table.add_column("Tipo", style="dim")
+    table.add_column("LLM", style="green")
     table.add_column("Status")
     table.add_column("Tempo (s)", justify="right")
     table.add_column("Tokens In", justify="right")
@@ -385,162 +146,157 @@ def _display_summary(results: list[TaskResult]) -> None:
     table.add_column("Custo (US$)", justify="right")
 
     total_cost = 0.0
-    total_time = 0.0
+    total_time_ms = 0
     total_in = 0
     total_out = 0
 
-    for r in results:
-        status = "[green]OK[/green]" if r.success else "[red]FALHA[/red]"
+    for r in results_list:
+        if r.success:
+            status = "[green]OK[/green]" if not r.cache_hit else "[cyan]CACHE[/cyan]"
+        else:
+            status = "[red]FALHA[/red]"
         table.add_row(
             r.task_id,
-            r.agent_name,
-            r.model_used,
+            plan_task_types.get(r.task_id, "?"),
+            r.llm_used,
             status,
-            f"{r.duration_seconds:.1f}",
+            f"{(r.duration_ms or 0) / 1000:.1f}",
             str(r.tokens_input),
             str(r.tokens_output),
-            f"{r.cost_usd:.4f}",
+            f"{r.cost:.4f}",
         )
-        total_cost += r.cost_usd
-        total_time += r.duration_seconds
+        total_cost += r.cost
+        total_time_ms += r.duration_ms or 0
         total_in += r.tokens_input
         total_out += r.tokens_output
 
     table.add_section()
     table.add_row(
         "[bold]TOTAL[/bold]", "", "", "",
-        f"[bold]{total_time:.1f}[/bold]",
+        f"[bold]{total_time_ms / 1000:.1f}[/bold]",
         f"[bold]{total_in}[/bold]",
         f"[bold]{total_out}[/bold]",
         f"[bold]{total_cost:.4f}[/bold]",
     )
-
     console.print()
     console.print(table)
 
-    # ── Status de uso por modelo (5 LLMs) ──
-    model_stats: dict[str, dict] = {}
-    for r in results:
-        provider = r.agent_name or "unknown"
-        if provider not in model_stats:
-            model_stats[provider] = {"tasks": 0, "ok": 0, "fail": 0, "cost": 0.0, "tokens": 0, "time": 0.0}
-        model_stats[provider]["tasks"] += 1
-        model_stats[provider]["ok"] += 1 if r.success else 0
-        model_stats[provider]["fail"] += 0 if r.success else 1
-        model_stats[provider]["cost"] += r.cost_usd
-        model_stats[provider]["tokens"] += r.tokens_input + r.tokens_output
-        model_stats[provider]["time"] += r.duration_seconds
+    # Tabela: Uso por LLM (canonico, 5 LLMs do LLM_CONFIGS)
+    llm_stats: dict[str, dict] = {
+        name: {"tasks": 0, "ok": 0, "fail": 0, "cost": 0.0, "tokens": 0, "time_ms": 0}
+        for name in LLM_CONFIGS
+    }
+    for r in results_list:
+        bucket = r.llm_used if r.llm_used in llm_stats else None
+        # Aliases (ex.: 'semantic_cache', 'code_executor' nao contam para 5 LLMs)
+        if bucket is None:
+            continue
+        llm_stats[bucket]["tasks"] += 1
+        llm_stats[bucket]["ok"] += 1 if r.success else 0
+        llm_stats[bucket]["fail"] += 0 if r.success else 1
+        llm_stats[bucket]["cost"] += r.cost
+        llm_stats[bucket]["tokens"] += r.tokens_input + r.tokens_output
+        llm_stats[bucket]["time_ms"] += r.duration_ms or 0
 
-    usage_table = Table(title="Uso por Modelo (5 LLMs)", show_lines=False)
+    usage_table = Table(title="Uso por LLM (5 canonicos)", show_lines=False)
     usage_table.add_column("Provider", style="bold")
     usage_table.add_column("Tarefas", justify="center")
     usage_table.add_column("OK", justify="center", style="green")
     usage_table.add_column("Falha", justify="center", style="red")
+    usage_table.add_column("Share %", justify="right")
     usage_table.add_column("Tokens", justify="right")
     usage_table.add_column("Custo (US$)", justify="right")
     usage_table.add_column("Tempo (s)", justify="right")
     usage_table.add_column("Cobertura", justify="center")
 
-    all_providers = ["Anthropic/Claude", "OpenAI/GPT-4o", "Google/Gemini", "Perplexity/Sonar", "Groq/Llama"]
-    provider_aliases = {
-        "Anthropic/Claude": ["anthropic", "claude", "architect"],
-        "OpenAI/GPT-4o": ["openai", "gpt4o", "gpt-4o", "writer"],
-        "Google/Gemini": ["google", "gemini", "analyzer"],
-        "Perplexity/Sonar": ["perplexity", "sonar", "researcher"],
-        "Groq/Llama": ["groq", "llama", "groq_agent"],
-    }
-
     used_count = 0
-    for display_name in all_providers:
-        aliases = provider_aliases[display_name]
-        stats = {"tasks": 0, "ok": 0, "fail": 0, "cost": 0.0, "tokens": 0, "time": 0.0}
-        for alias in aliases:
-            for key, val in model_stats.items():
-                if alias.lower() in key.lower():
-                    for k in stats:
-                        stats[k] += val[k]
-        if stats["tasks"] > 0:
+    total_tasks_routed = sum(s["tasks"] for s in llm_stats.values()) or 1
+    for name in ["claude", "gpt4o", "gemini", "perplexity", "groq"]:
+        s = llm_stats[name]
+        share = (s["tasks"] / total_tasks_routed) * 100
+        if s["tasks"] > 0:
             used_count += 1
             coverage = "[green]USADO[/green]"
         else:
             coverage = "[red]NAO USADO[/red]"
+        # Marca cap se share > 80% (regra v2.0)
+        share_str = f"{share:.0f}%"
+        if share > 80:
+            share_str = f"[red]{share:.0f}%[/red]"
+        elif share > 50:
+            share_str = f"[yellow]{share:.0f}%[/yellow]"
         usage_table.add_row(
-            display_name,
-            str(stats["tasks"]),
-            str(stats["ok"]),
-            str(stats["fail"]),
-            f"{stats['tokens']:,}",
-            f"{stats['cost']:.4f}",
-            f"{stats['time']:.1f}",
+            _LLM_PROVIDER_LABEL[name],
+            str(s["tasks"]),
+            str(s["ok"]),
+            str(s["fail"]),
+            share_str,
+            f"{s['tokens']:,}",
+            f"{s['cost']:.4f}",
+            f"{s['time_ms'] / 1000:.1f}",
             coverage,
         )
-
     console.print()
     console.print(usage_table)
     coverage_pct = (used_count / 5) * 100
     color = "green" if used_count == 5 else "yellow" if used_count >= 3 else "red"
-    console.print(f"\n[{color}]Cobertura de modelos: {used_count}/5 ({coverage_pct:.0f}%)[/{color}]")
-    if used_count < 5:
-        console.print("[yellow]Atenção: nem todos os 5 modelos foram utilizados nesta execução.[/yellow]")
+    console.print(f"\n[{color}]Cobertura de LLMs: {used_count}/5 ({coverage_pct:.0f}%)[/{color}]")
+
+    # Resumo v2.0: cache, dedup, quality retries
+    extras = Table(title="Indicadores v2.0", show_lines=False, box=None)
+    extras.add_column("Indicador", style="bold")
+    extras.add_column("Valor", justify="right")
+    extras.add_row("Tarefas concluidas", f"{report.tasks_completed}")
+    extras.add_row("Tarefas falhas", f"{report.tasks_failed}")
+    extras.add_row("Tarefas em cache", f"{report.tasks_cached}")
+    extras.add_row("Tarefas deduplicadas", f"{report.tasks_deduplicated}")
+    extras.add_row("Retentativas por qualidade", f"{report.tasks_quality_retried}")
+    extras.add_row("Custo estimado", f"US$ {report.estimated_cost:.4f}")
+    extras.add_row("Custo real", f"US$ {report.total_cost:.4f}")
+    extras.add_row("Tempo total", f"{report.total_duration_ms / 1000:.1f}s")
+    extras.add_row("Limite de orcamento", f"US$ {report.budget_limit:.2f}")
+    console.print()
+    console.print(extras)
 
 
-def _save_report(plan: dict, results: list[TaskResult], output_dir: Path) -> None:
-    """Salva relatório completo da execução."""
+def _save_report(report: ExecutionReport, output_dir: Path) -> Path:
+    """Salva ExecutionReport em output/execution_<ts>.json + append em cost_history.jsonl."""
     output_dir.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_path = output_dir / f"execution_{timestamp}.json"
 
-    report = {
+    payload = {
         "timestamp": datetime.now().isoformat(),
-        "plan": plan,
-        "results": [
-            {
-                "task_id": r.task_id,
-                "task_type": r.task_type.value,
-                "agent_name": r.agent_name,
-                "model_used": r.model_used,
-                "success": r.success,
-                "error": r.error,
-                "tokens_input": r.tokens_input,
-                "tokens_output": r.tokens_output,
-                "cost_usd": r.cost_usd,
-                "duration_seconds": r.duration_seconds,
-                "output_preview": str(r.output) if r.output else None,
-            }
-            for r in results
-        ],
+        "demand": report.demand,
+        "summary": report.summary,
         "totals": {
-            "cost_usd": sum(r.cost_usd for r in results),
-            "duration_seconds": sum(r.duration_seconds for r in results),
-            "tokens_input": sum(r.tokens_input for r in results),
-            "tokens_output": sum(r.tokens_output for r in results),
-            "tasks_succeeded": sum(1 for r in results if r.success),
-            "tasks_failed": sum(1 for r in results if not r.success),
+            "cost_usd": report.total_cost,
+            "estimated_cost_usd": report.estimated_cost,
+            "duration_ms": report.total_duration_ms,
+            "tasks_completed": report.tasks_completed,
+            "tasks_failed": report.tasks_failed,
+            "tasks_cached": report.tasks_cached,
+            "tasks_deduplicated": report.tasks_deduplicated,
+            "tasks_quality_retried": report.tasks_quality_retried,
+            "budget_limit": report.budget_limit,
         },
+        "plan": report.plan.model_dump(mode="json"),
+        "results": {tid: r.model_dump(mode="json") for tid, r in report.results.items()},
     }
+    report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    console.print(f"\nRelatorio salvo em: [cyan]{report_path}[/cyan]")
 
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    console.print(f"\nRelatório salvo em: [cyan]{report_path}[/cyan]")
-
-    # Salvar outputs individuais
-    for r in results:
-        if r.success and r.output:
-            task_path = output_dir / f"{timestamp}_{r.task_id}.json"
-            task_path.write_text(
-                json.dumps(r.output, ensure_ascii=False, indent=2) if isinstance(r.output, dict) else str(r.output),
-                encoding="utf-8",
-            )
-
-    # Append ao log de custos
+    # Append ao log de custos consolidado
     COST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(COST_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps({
             "timestamp": datetime.now().isoformat(),
-            "cost_usd": report["totals"]["cost_usd"],
-            "tasks": report["totals"]["tasks_succeeded"] + report["totals"]["tasks_failed"],
-            "tokens": report["totals"]["tokens_input"] + report["totals"]["tokens_output"],
+            "cost_usd": report.total_cost,
+            "tasks": report.tasks_completed + report.tasks_failed,
+            "tokens": sum(r.tokens_input + r.tokens_output for r in report.results.values()),
         }) + "\n")
+
+    return report_path
 
 
 # ---------------------------------------------------------------------------
@@ -555,94 +311,209 @@ def cli():
 @cli.command()
 @click.argument("demand")
 @click.option("--dry-run", is_flag=True, help="Mostra o plano sem executar.")
-@click.option("--verbose", is_flag=True, help="Mostra cada passo durante a execução.")
-@click.option("--output-dir", type=click.Path(), default="output", help="Diretório para salvar resultados.")
-def run(demand: str, dry_run: bool, verbose: bool, output_dir: str):
-    """Executa o pipeline completo para uma demanda."""
+@click.option("--verbose", is_flag=True, help="Mostra cada passo durante a execucao.")
+@click.option("--output-dir", type=click.Path(), default="output", help="Diretorio para salvar resultados.")
+@click.option("--force", is_flag=True, help="Ignora o budget guard (BUDGET_LIMIT).")
+@click.option("--no-smart", is_flag=True, help="Desliga o SmartRouter (debug; usa Router classico).")
+def run(demand: str, dry_run: bool, verbose: bool, output_dir: str, force: bool, no_smart: bool):
+    """Executa o pipeline v2.0 completo para uma demanda.
+
+    Caminho v2.0 (Orchestrator): SmartRouter + cap 80% + quality gates +
+    semantic cache + code-first gate + checkpoint + fallback chain estruturada
+    + FinOps budget check por tarefa.
+    """
     console.print(Panel(
         f"[bold]Demanda:[/bold] {demand}",
-        title="geo-orchestrator",
+        title="geo-orchestrator v2.0",
         border_style="blue",
     ))
 
-    # Mostrar a banca de modelos disponíveis
-    banca = Table(title="Banca de Modelos", show_lines=False, box=None)
-    banca.add_column("Papel", style="bold")
+    # Banca canonica via LLM_CONFIGS (5 LLMs source of truth)
+    banca = Table(title="Banca de Modelos (canonica)", show_lines=False, box=None)
+    banca.add_column("LLM", style="bold")
     banca.add_column("Modelo", style="cyan")
     banca.add_column("Provider")
+    banca.add_column("Papel")
     banca.add_column("Status")
-    banca.add_row("Pesquisador", "sonar-pro", "Perplexity", "[green]ativo[/green]" if _check_api_key("PERPLEXITY_API_KEY") else "[red]sem chave[/red]")
-    banca.add_row("Redator", "gpt-4o", "OpenAI", "[green]ativo[/green]" if _check_api_key("OPENAI_API_KEY") else "[red]sem chave[/red]")
-    banca.add_row("Arquiteto", "claude-opus-4-6", "Anthropic", "[green]ativo[/green]" if _check_api_key("ANTHROPIC_API_KEY") else "[red]sem chave[/red]")
-    banca.add_row("Analista", "gemini-2.5-flash", "Google", "[green]ativo[/green]" if _check_api_key("GOOGLE_AI_API_KEY") else "[red]sem chave[/red]")
-    banca.add_row("Velocista", "llama-3.3-70b", "Groq", "[green]ativo[/green]" if _check_api_key("GROQ_API_KEY") else "[red]sem chave[/red]")
+    for name, cfg in LLM_CONFIGS.items():
+        banca.add_row(
+            name,
+            cfg.model,
+            cfg.provider.value,
+            cfg.role[:60] + ("..." if len(cfg.role) > 60 else ""),
+            "[green]ativo[/green]" if _check_api_key(cfg.api_key_env) else "[red]sem chave[/red]",
+        )
     console.print(banca)
     console.print()
 
-    # Fase 1: Decomposição
-    console.print("[bold cyan]Fase 1:[/bold cyan] [blue][Anthropic/Claude][/blue] Decompondo demanda em tarefas...\n")
-    plan = asyncio.run(_decompose_demand(demand))
-    _display_plan(plan)
+    if verbose:
+        logging.getLogger().setLevel(logging.INFO)
 
+    # Modo dry-run: usa apenas Orchestrator.decompose para mostrar o plano
     if dry_run:
-        console.print("[yellow]Modo dry-run: execução pulada.[/yellow]")
+        console.print("[bold cyan]Dry-run:[/bold cyan] decompondo demanda via Orchestrator...\n")
+        orch = Orchestrator(force=force, smart=not no_smart)
+        plan_obj = asyncio.run(orch.decompose(demand))
+        _display_plan(plan_obj)
+
+        # Salvar plano para inspecao
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        plan_path = REPORT_DIR / f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        plan_path.write_text(
+            json.dumps(plan_obj.model_dump(mode="json"), ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        console.print(f"\nPlano salvo em: [cyan]{plan_path}[/cyan]")
+        console.print("[yellow]Modo dry-run: execucao pulada.[/yellow]")
         return
 
-    # Fase 2: Execução
-    console.print("[bold cyan]Fase 2:[/bold cyan] Executando tarefas com roteamento por modelo...\n")
-    results = asyncio.run(_execute_plan(plan, verbose=verbose, output_dir=Path(output_dir)))
+    # Execucao completa via Orchestrator v2.0
+    console.print("[bold cyan]Pipeline v2.0:[/bold cyan] PromptRefiner -> Decompose -> SmartRouter -> CodeFirst -> Cache -> Pipeline (cap 80% + quality + fallback)\n")
+    orch = Orchestrator(force=force, smart=not no_smart)
+    try:
+        report: ExecutionReport = asyncio.run(orch.run(demand))
+    except Exception as exc:
+        console.print(f"\n[red]Falha na execucao do orchestrator:[/red] {exc}")
+        sys.exit(1)
 
-    # Fase 3: Relatório
-    _display_summary(results)
-    _save_report(plan, results, Path(output_dir))
+    _display_summary(report)
+    _save_report(report, Path(output_dir))
 
-    failed = sum(1 for r in results if not r.success)
-    if failed:
-        console.print(f"\n[red]{failed} tarefa(s) falharam. Verifique o relatório.[/red]")
+    if report.tasks_failed:
+        console.print(f"\n[red]{report.tasks_failed} tarefa(s) falharam. Verifique o relatorio.[/red]")
         sys.exit(1)
     else:
-        console.print("\n[green]Todas as tarefas concluídas com sucesso.[/green]")
+        console.print("\n[green]Todas as tarefas concluidas com sucesso.[/green]")
 
 
 @cli.command()
 @click.argument("demand")
-def plan(demand: str):
-    """Decompõe a demanda e mostra o plano sem executar."""
-    console.print("[bold cyan]Decompondo demanda...[/bold cyan]")
-    decomposed = asyncio.run(_decompose_demand(demand))
-    _display_plan(decomposed)
+@click.option("--no-smart", is_flag=True, help="Desliga o SmartRouter (usa Router classico).")
+def plan(demand: str, no_smart: bool):
+    """Decompoe a demanda via Orchestrator v2.0 e mostra o plano sem executar."""
+    console.print("[bold cyan]Decompondo demanda via Orchestrator v2.0...[/bold cyan]")
+    orch = Orchestrator(smart=not no_smart)
+    plan_obj = asyncio.run(orch.decompose(demand))
+    _display_plan(plan_obj)
 
-    # Salvar plano
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     plan_path = REPORT_DIR / f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    plan_path.write_text(json.dumps(decomposed, ensure_ascii=False, indent=2), encoding="utf-8")
+    plan_path.write_text(
+        json.dumps(plan_obj.model_dump(mode="json"), ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     console.print(f"Plano salvo em: [cyan]{plan_path}[/cyan]")
 
 
 @cli.command()
+@click.option(
+    "--checkpoint",
+    "-c",
+    type=click.Path(exists=True, dir_okay=False),
+    default="output/.checkpoint.json",
+    show_default=True,
+    help="Arquivo de checkpoint a retomar.",
+)
+@click.option("--no-smart", is_flag=True, help="Desliga o SmartRouter (usa Router classico).")
+@click.option("--output-dir", type=click.Path(), default="output", help="Diretorio para salvar resultados.")
+def resume(checkpoint: str, no_smart: bool, output_dir: str):
+    """Retoma uma execucao interrompida a partir de um checkpoint.
+
+    O checkpoint e gravado pelo Pipeline a cada wave em output/.checkpoint.json.
+    Em caso de crash, timeout ou Ctrl-C, basta `python cli.py resume` para
+    continuar do ultimo wave salvo sem reexecutar tarefas concluidas.
+    """
+    checkpoint_path = Path(checkpoint)
+    console.print(Panel(
+        f"[bold]Checkpoint:[/bold] {checkpoint_path}",
+        title="geo-orchestrator resume",
+        border_style="cyan",
+    ))
+
+    router = SmartRouter() if not no_smart else Router()
+    try:
+        results = asyncio.run(Pipeline.resume(checkpoint_path, router))
+    except FileNotFoundError as exc:
+        console.print(f"[red]Checkpoint nao encontrado:[/red] {exc}")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"[red]Falha ao retomar pipeline:[/red] {exc}")
+        sys.exit(1)
+
+    completed = sum(1 for r in results.values() if r.success)
+    failed = sum(1 for r in results.values() if not r.success)
+    total_cost = sum(r.cost for r in results.values())
+
+    console.print()
+    console.print(f"[green]Retomada concluida:[/green] {completed} ok, {failed} falhas, custo US$ {total_cost:.4f}")
+
+    # Salvar payload simples (sem ExecutionReport completo)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    resume_path = out_dir / f"resume_{timestamp}.json"
+    payload = {
+        "timestamp": datetime.now().isoformat(),
+        "checkpoint": str(checkpoint_path),
+        "totals": {
+            "cost_usd": total_cost,
+            "tasks_completed": completed,
+            "tasks_failed": failed,
+        },
+        "results": {tid: r.model_dump(mode="json") for tid, r in results.items()},
+    }
+    resume_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    console.print(f"Resultado salvo em: [cyan]{resume_path}[/cyan]")
+
+    if failed:
+        sys.exit(1)
+
+
+@cli.command()
 def status():
-    """Mostra LLMs disponíveis e seu status."""
-    table = Table(title="Status dos LLMs")
-    table.add_column("Provider", style="cyan")
+    """Mostra LLMs canonicos (LLM_CONFIGS) e seu status — alem do FinOps diario."""
+    table = Table(title="Status dos LLMs (canonicos)")
+    table.add_column("LLM", style="cyan")
     table.add_column("Modelo")
-    table.add_column("Tarefas")
+    table.add_column("Provider")
+    table.add_column("Strengths")
     table.add_column("API Key")
     table.add_column("Status")
 
-    for key, cfg in MODELS.items():
-        has_key = _check_api_key(cfg["env_key"])
+    for name, cfg in LLM_CONFIGS.items():
+        has_key = _check_api_key(cfg.api_key_env)
         status_str = "[green]Configurado[/green]" if has_key else "[red]Faltando[/red]"
-        key_preview = f"{os.getenv(cfg['env_key'], '')[:8]}..." if has_key else "N/A"
-
+        key_preview = f"{os.getenv(cfg.api_key_env, '')[:8]}..." if has_key else "N/A"
         table.add_row(
-            cfg["provider"],
-            cfg["name"],
-            ", ".join(cfg["tasks"]),
+            name,
+            cfg.model,
+            cfg.provider.value,
+            ", ".join(cfg.strengths[:3]),
             key_preview,
             status_str,
         )
-
     console.print(table)
+
+    # Pre-aviso FinOps: providers proximos do limite diario (gap fechado pela refatoracao)
+    try:
+        fo = get_finops()
+        finops_status = fo.daily_status()
+        warnings = []
+        for provider, data in finops_status.items():
+            if provider.startswith("_"):
+                continue
+            pct = data.get("usage_pct", 0)
+            if pct >= 80:
+                tag = "[red]BLOQUEADO[/red]" if pct >= 95 else "[yellow]ALERTA[/yellow]"
+                warnings.append(
+                    f"  {tag} {provider}: US$ {data['spent']:.4f} / {data['limit']:.2f} ({pct:.0f}%)"
+                )
+        if warnings:
+            console.print("\n[bold yellow]FinOps — providers proximos do limite:[/bold yellow]")
+            for w in warnings:
+                console.print(w)
+    except Exception:
+        pass
 
 
 @cli.command(name="cost-report")
@@ -688,25 +559,26 @@ def cost_report():
 
 @cli.command()
 def models():
-    """Lista todos os modelos configurados."""
-    table = Table(title="Modelos Configurados")
+    """Lista os 5 LLMs canonicos (LLM_CONFIGS — source of truth)."""
+    table = Table(title="LLMs Configurados (canonicos)")
     table.add_column("ID", style="cyan")
     table.add_column("Modelo")
     table.add_column("Provider")
     table.add_column("Custo/1K In (US$)", justify="right")
     table.add_column("Custo/1K Out (US$)", justify="right")
-    table.add_column("Tarefas")
+    table.add_column("Max Tokens", justify="right")
+    table.add_column("Strengths")
 
-    for key, cfg in MODELS.items():
+    for name, cfg in LLM_CONFIGS.items():
         table.add_row(
-            key,
-            cfg["name"],
-            cfg["provider"],
-            f"{cfg['cost_1k_in']:.6f}",
-            f"{cfg['cost_1k_out']:.6f}",
-            ", ".join(cfg["tasks"]),
+            name,
+            cfg.model,
+            cfg.provider.value,
+            f"{cfg.cost_per_1k_input:.6f}",
+            f"{cfg.cost_per_1k_output:.6f}",
+            str(cfg.max_tokens),
+            ", ".join(cfg.strengths[:3]),
         )
-
     console.print(table)
 
 

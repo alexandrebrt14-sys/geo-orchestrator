@@ -9,6 +9,53 @@ checkpoints, quality gates e governanca FinOps.
 
 **Estado atual**: v2.0 | ~12.500 linhas de Python | 42 arquivos | 33 commits | 116+ execuções
 
+## 2026-04-07 — CLI religado ao Orchestrator v2.0 (refatoracao critica)
+
+A auditoria de 2026-04-07 confirmou que o `cli.py` executava um caminho legacy
+v1.0 (`_execute_plan`) que ignorava toda a infraestrutura v2.0 — SmartRouter,
+cap 80%, quality gates, semantic cache, code-first gate, fallback chain
+estruturada, FinOps por tarefa, checkpoint/resume. Sintoma: na execucao
+20260407_180740, **12/12 tarefas foram para Claude (100% concentracao)** e o
+gasto diario Anthropic atingiu US$ 4.97 / US$ 5.00 (limite). Cap 80% nunca rodou.
+
+A refatoracao na branch `refactor/cli-orchestrator-v2` religou o CLI ao
+`Orchestrator(smart=True).run()` e fechou de uma vez 9 gaps:
+
+| Gap | Status |
+|---|---|
+| SmartRouter (SIMPLE/MODERATE/COMPLEX) | ATIVO no CLI |
+| Cap 80% por provider | ATIVO no CLI |
+| Quality gates por wave | ATIVO no CLI |
+| Quality Judge (5 dimensoes) | ATIVO no CLI |
+| Fallback chain estruturada (4-5 LLMs) | ATIVO no CLI |
+| Semantic Cache (Jaccard) | ATIVO no CLI |
+| Code-First Gate (tarefas deterministicas sem LLM) | ATIVO no CLI |
+| FinOps `check_budget()` por tarefa + redirect cheapest | ATIVO no CLI |
+| Timeout granular por task type | ATIVO no CLI |
+| Tier routing duplicado em `cli.py` | REMOVIDO (fonte unica: `LLM_CONFIGS`) |
+| Comando `cli resume <checkpoint>` | NOVO — expoe `Pipeline.resume()` |
+
+Ver `docs/REFACTOR_2026-04-07.md` para detalhes e `cli.py` (~759 linhas) para
+o codigo final. Os testes existentes (20/20) continuam passando.
+
+### Comandos novos / atualizados
+
+- `python cli.py run "<demanda>"` — agora chama `Orchestrator(smart=True).run()`
+- `python cli.py run "<demanda>" --dry-run` — usa `Orchestrator.decompose()`
+- `python cli.py run "<demanda>" --force` — bypass do budget guard
+- `python cli.py run "<demanda>" --no-smart` — debug, usa Router classico
+- `python cli.py resume [-c output/.checkpoint.json]` — retoma execucao interrompida
+- `python cli.py status` — agora alem do status mostra alerta FinOps quando provider passa de 80% do limite diario
+
+### Compatibilidade
+
+- Plan/Task/TaskResult passam a usar os tipos canonicos `src/models.py`
+  (nao mais `src/agents/base.py`).
+- O JSON de relatorio em `output/execution_*.json` mudou de schema (plan e
+  agora `Plan.model_dump()`, results e `dict[task_id, TaskResult]`). Scripts
+  externos que liam o formato antigo precisam ser ajustados.
+
+
 ## v2.0 — Upgrade (29/Mar/2026)
 
 Baseado na analise de 38 artigos academicos (CASTER, HALO, AFlow, Anthropic Engineering, Google Research).
