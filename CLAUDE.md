@@ -7,7 +7,135 @@ decompoe em tarefas via Claude, roteia cada tarefa para o LLM mais adequado
 (scoring adaptativo + fallback), e executa em waves paralelas com cache,
 checkpoints, quality gates e governanca FinOps.
 
-**Estado atual**: v2.0 | ~12.500 linhas de Python | 42 arquivos | 33 commits | 116+ execuções
+**Estado atual**: v2.0 | ~13.500 linhas de Python | 49 arquivos | 140/140 tests | 117+ execuções
+
+## 2026-04-08 — Sprint 7 (catalog runtime SoT + /health + dashboard HTML + safety calibration + coverage)
+
+A sprint 7 atacou as 6 prioridades vindas da analise tecnica do orchestrator
+run #7 (executado pelos proprios 5 LLMs, $0.0718, 11/11 tasks). Foco:
+fechar o ultimo gap arquitetural critico (catalog YAML como SoT runtime),
+expor health pollable HTTP, dashboard publico e blindar o auto-calibrator
+contra drift destrutivo.
+
+| Item | Origem | Status |
+|---|---|---|
+| **catalog YAML como runtime SoT** (LLM_CONFIGS) | Gap #4 sev 4 (gemini t6) | RESOLVIDO + 4 tests + retro-compat |
+| **Rollback safety do auto-calibrator** | Crítica gpt4o t5 (review sprint 6) | RESOLVIDO + 2 tests + comando `finops calibrate-rollback` |
+| **/health HTTP endpoint** (stdlib) | Gap #3 sev 4 | RESOLVIDO + 4 tests + comando `cli serve` |
+| **Dashboard HTML estatico** (Chart.js) | Gap #5 sev 4 | RESOLVIDO + 3 tests + opcao `dashboard --html` |
+| **Coverage badge + pytest-cov** | Gap #6 sev 2 | RESOLVIDO + CI atualizado, codecov action |
+| Bug oportunistico: gpt4o cost no test_outlier | Detectado pelo safety threshold | RESOLVIDO |
+
+**Marcos da sprint 7**:
+
+- `src/catalog_loader.build_llm_configs_from_catalog()` constroi `LLMConfig`
+  dict em runtime a partir de `catalog/model_catalog.yaml` (que ganhou
+  `api_key_env` por provider). `config.py` tenta o catalog primeiro;
+  fallback automatico para o dict hardcoded se PyYAML/catalog ausente.
+  `GEO_CATALOG_PATH` env var permite hot-reload; `GEO_DISABLE_CATALOG_RUNTIME`
+  forca o fallback para debug. Strengths/role continuam vindo do dict
+  estatico (metadata de apresentacao, nao roteamento).
+- `cost_calibrator` ganhou `SAFETY_DEVIATION_MAX=5.0` e `SAFETY_DEVIATION_MIN=0.2`:
+  candidatos que divergem mais que isso do default sao **rejeitados**
+  e logados em `safety_rejections[]`. Antes de cada `recalibrate(persist=True)`,
+  o `.cost_calibration.json` atual e copiado para `.cost_calibration.backup.json`.
+  Comando novo: `cli.py finops calibrate-rollback` restaura o backup.
+- `src/health_server.py` (stdlib `http.server`) expoe `GET /health`,
+  `GET /metrics`, `GET /` com status 200/503. Reusa os mesmos 6 checks do
+  `cli doctor` mas em formato pollable para LB/k8s/cron. Comando novo:
+  `cli.py serve --port 8080`. Zero deps adicionais.
+- `src/dashboard_html.py` gera HTML auto-contido com 5 graficos Chart.js
+  (CDN), KPI cards, tabela dos 10 ultimos runs e palette dark do GitHub.
+  Deployable em qualquer servidor estatico. Comando novo:
+  `cli.py dashboard --html PATH`. Consolida tier interno Claude no slot
+  canonico para o bar chart de uso por LLM.
+- `.github/workflows/tests.yml` agora roda com `pytest-cov`, gera
+  `coverage.xml` e faz upload pra Codecov via `codecov/codecov-action@v4`.
+  Coverage atual: **53% global** (Sprint 5/6/7 modulos: 70-98%).
+
+**Dados do orchestrator run #7 que originou esta sprint**:
+- 11/11 tasks completas em 204s, $0.0718
+- Anthropic estava bloqueado (102% do limite diario) — fallback chain
+  redirecionou TODAS as tasks Claude para Sonnet/Groq sem falha
+- 5 LLMs canonicos usados (4/5 em runtime, claude via tier interno Sonnet)
+- Triple review paralelo (acentuacao + codigo + estilo) na wave 3
+- Quality Judge: APROVADO (87/100)
+
+## 2026-04-08 — Sprint 6 (E2E mockado + auto-trigger calibracao + doctor + CI)
+
+A sprint 6 fechou os 4 itens que faltavam para considerar o produto
+"funcional, avancado e estavel". Foco: cobertura de regressao do contrato
+inteiro, fechamento do loop de calibracao sem intervencao humana, e
+ferramenta de health check pronta para CI/cron.
+
+| Item | Tipo | Status |
+|---|---|---|
+| Tests legados quebrados (test_core asyncio + scripts/) | Bug | RESOLVIDO — `pyproject.toml` testpaths + `asyncio.run` |
+| E2E test suite com pipeline mockado | P1 deferido sprint 5 | RESOLVIDO + 6 tests (`tests/test_e2e.py`) |
+| Auto-trigger de calibracao quando drift dispara | Sprint 6 | RESOLVIDO + 1 test (orchestrator.run) |
+| `cli.py doctor` health check | Sprint 6 | RESOLVIDO + 3 tests (6 checks: keys, catalog, finops, kpi, calibration, drift) |
+| GitHub Actions CI workflow | Sprint 6 | RESOLVIDO (`.github/workflows/tests.yml` matriz 3.11/3.12) |
+| Bug calibrator: results lista vs dict | Sprint 6 | RESOLVIDO defensivamente em `_load_costs_by_llm` |
+| KPI quality_judge_pass aceita verdicts PT-BR | Sprint 6 | RESOLVIDO — antes so aceitava EN, real do QualityJudge e "APROVADO" |
+
+**Marcos da sprint 6**:
+
+- `tests/test_e2e.py` mocka `LLMClient.query` + `QualityJudge.evaluate` e
+  executa `Orchestrator.run()` ponta-a-ponta (PromptRefiner -> decompose ->
+  waves -> quality -> kpi -> report). Roda em 1.5s sem nenhuma chamada
+  de rede. Cobre tambem cache hit, calibrator E2E, replay e auto-trigger.
+- Orchestrator agora dispara `recalibrate()` automaticamente quando
+  `detect_drift()` retorna alerta — fecha o loop completo do drift sem
+  intervencao humana. Marca o auto-fix no `report.summary`.
+- `python cli.py doctor [--json] [--strict]` roda 6 health checks:
+  api_keys, catalog_consistency (via `assert_catalog_consistent`),
+  finops_daily, kpi_history freshness, cost_calibration age, drift_detector.
+  Saida humana (Rich) ou JSON estruturado. `--strict` faz exit 1 em
+  ATENCAO/CRITICO — pronto para Task Scheduler/cron gating.
+- `.github/workflows/tests.yml` roda pytest em matriz Python 3.11+3.12
+  + smoke do CLI doctor + valida o catalog YAML em todo PR contra main.
+- Fix oportunistico: `compute_quality_judge_pass_rate` so reconhecia
+  verdicts em ingles. Agora aceita "APROVADO", "APROVADO_COM_RESSALVAS"
+  (canonicos do `QualityJudge` PT-BR) alem dos aliases EN.
+- Fix oportunistico: `cost_calibrator._load_costs_by_llm` aceita tanto
+  `results` como dict (formato canonico) quanto list (formato legado v1.0).
+
+## 2026-04-08 — Sprint 5 (auto-calibracao + 2 KPIs novos + replay + --since + catalog SoT)
+
+A sprint 5 fechou os 4 itens P1 + 2 P2 do backlog publico (4 commits, +20 tests).
+Foco: fechar o loop do drift de custo sem intervencao humana e amadurecer o
+CLI/dashboard como ferramenta de auditoria e replay.
+
+| Item | Tipo | Status |
+|---|---|---|
+| Adaptive AVG_COST_PER_CALL auto-calibration | P1 | RESOLVIDO + 4 tests (`src/cost_calibrator.py`) |
+| KPI quality_judge_pass_rate | P1 | RESOLVIDO + 3 tests + persistido em jsonl |
+| KPI parallelism_efficiency (speedup) | P1 | RESOLVIDO + 3 tests + alimentado pelo Pipeline._wave_timings |
+| catalog/model_catalog.yaml SoT | P1 | RESOLVIDO + 3 tests + `src/catalog_loader.py` validator |
+| dashboard --since 7d/24h/30d filter | P2 | RESOLVIDO + 2 tests |
+| `cli.py replay <execution_id>` | P2 | RESOLVIDO + 3 tests |
+
+**Marcos da sprint 5**:
+
+- `src/cost_calibrator.py` aprende AVG_COST_PER_CALL do historico real de
+  `output/execution_*.json` e persiste em `output/.cost_calibration.json`.
+  Orchestrator._estimate_cost e FinOps.pre_execution_check passam a usar
+  `get_calibrated_avg_cost()` em vez do dict estatico de `config.py`.
+  Comando novo: `python cli.py finops calibrate --window 30`.
+- 2 KPIs novos no `.kpi_history.jsonl`: `quality_judge_pass` (1.0/0.0/None
+  por run, agregado em pass_rate pelo dashboard) e `parallelism_efficiency`
+  (sum(task_durations) / total_duration — speedup vs sequencial).
+- Dashboard ganhou colunas QJ + Par e filtro `--since 7d` antes de aplicar
+  `--limit`. CSV/JSON export tambem incluem os 2 KPIs novos.
+- `cli.py replay 20260408_120000` (ou `replay last`) le um execution report
+  historico e re-renderiza summary completo sem custo de LLM. Util para
+  auditoria, demos e comparacao de runs.
+- `catalog/model_catalog.yaml` v2.0 sincronizado com `LLM_CONFIGS` canonico
+  (IDs reais: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5, gpt-4o,
+  gemini-2.5-pro, sonar-pro, llama-3.3-70b-versatile). `src/catalog_loader.py`
+  fornece `assert_catalog_consistent()` para travar drift no CI.
+- Fix oportunista: `LLM_CONFIGS["perplexity"]` estava com `cost_per_1k=$0.001`
+  (subestimando ~3x). Realinhado para $0.003/$0.015 conforme catalog.
 
 ## 2026-04-07 — Sprint 4 (recalibracao de custo + 2 KPIs novos + 7 fixes)
 

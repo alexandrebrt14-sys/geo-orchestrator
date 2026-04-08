@@ -25,6 +25,7 @@ from .config import (
 )
 from .adaptive_decomposer import AdaptiveDecomposer
 from .code_executor import try_code_first, stats as code_first_stats
+from .cost_calibrator import get_calibrated_avg_cost
 from .kpi_history import append_kpi_entry, detect_drift
 from .llm_client import LLMClient
 from .models import ExecutionReport, Plan, Task, TaskComplexity, TaskResult
@@ -439,6 +440,11 @@ class Orchestrator:
         try:
             # Sprint 4: lê fallback_saves do Pipeline (se executou)
             fb_saves = getattr(pipeline, "_fallback_saves", 0) if tasks_to_run else 0
+            # Sprint 5 (2026-04-08): alimenta 2 KPIs novos (quality_judge_pass + parallelism_efficiency)
+            wave_timings = getattr(pipeline, "_wave_timings", []) if tasks_to_run else []
+            task_durations_ms = [
+                int(r.duration_ms or 0) for r in results.values() if not r.cache_hit
+            ]
             kpi_entry = append_kpi_entry(
                 demand=demand,
                 real_cost=total_cost,
@@ -448,11 +454,34 @@ class Orchestrator:
                 tasks_completed=completed,
                 tasks_failed=failed,
                 fallback_saves=fb_saves,
+                quality_verdict=(quality_score.verdict if quality_score else None),
+                wave_timings=wave_timings,
+                task_durations_ms=task_durations_ms,
             )
             drift_alert = detect_drift()
             if drift_alert:
+                # Sprint 6 (2026-04-08): auto-trigger calibration on drift.
+                # Em vez de pedir intervencao humana, recalibra automaticamente
+                # AVG_COST_PER_CALL a partir do historico real e marca no
+                # report.summary que o auto-fix foi aplicado.
+                from .cost_calibrator import recalibrate
+                try:
+                    cal = recalibrate(window=30)
+                    n_cal = len(cal.get("calibrated_avg_cost_per_call", {}))
+                    auto_fix = (
+                        f"[AUTO-CALIBRATION] Drift detectado — "
+                        f"recalibrado {n_cal} LLMs a partir de "
+                        f"{cal.get('sources_scanned', 0)} reports recentes."
+                    )
+                    logger.warning(
+                        "auto-calibration triggered: %d LLMs recalibrados de %d reports",
+                        n_cal, cal.get("sources_scanned", 0),
+                    )
+                except Exception as cal_exc:
+                    auto_fix = f"[AUTO-CALIBRATION] falhou: {cal_exc}"
+                    logger.warning("auto-calibration falhou: %s", cal_exc)
                 report.summary = (
-                    f"{report.summary}\n\n[ALERTA DRIFT] {drift_alert['recommended_action']}"
+                    f"{report.summary}\n\n[ALERTA DRIFT] {drift_alert['recommended_action']}\n{auto_fix}"
                 )
         except Exception as exc:
             logger.warning("KPI history persist falhou (nao bloqueia execucao): %s", exc)
@@ -822,7 +851,13 @@ class Orchestrator:
     # ==================================================================
 
     def _estimate_cost(self, tasks: list[Task]) -> float:
-        """Estimate total execution cost based on task types and LLM routing."""
+        """Estimate total execution cost based on task types and LLM routing.
+
+        Sprint 5 (2026-04-08): usa AVG_COST_PER_CALL calibrado a partir do
+        historico real (output/.cost_calibration.json) — fecha o loop de
+        drift do cost_estimate_accuracy detectado no sprint 3/4.
+        """
+        avg_table = get_calibrated_avg_cost()
         total = 0.0
         for task in tasks:
             routing = TASK_TYPES.get(task.type)
@@ -830,7 +865,7 @@ class Orchestrator:
                 llm_name = routing.primary
             else:
                 llm_name = "gemini"  # cheapest fallback
-            avg = AVG_COST_PER_CALL.get(llm_name, 0.01)
+            avg = avg_table.get(llm_name, 0.01)
             total += avg
         return total
 

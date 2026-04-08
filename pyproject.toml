@@ -17,3 +17,9 @@ geo-orchestrator = "cli:cli"
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.pytest.ini_options]
+# Sprint 6 (2026-04-08): scripts/ contem smoke scripts de rede com funcoes
+# `test_*` que NAO sao pytest cases — sao chamadas via asyncio.run em main().
+# Restringir coleta a tests/ evita falsos negativos no CI.
+testpaths = ["tests"]

@@ -42,7 +42,9 @@ class TestRateLimiter:
 
     def test_acquire_provider(self):
         rl = RateLimiter.get_instance()
-        asyncio.get_event_loop().run_until_complete(rl.acquire(Provider.GROQ))
+        # Sprint 6 (2026-04-08): asyncio.get_event_loop() depreciado em 3.12.
+        # Usa asyncio.run em vez disso.
+        asyncio.run(rl.acquire(Provider.GROQ))
         rpm = rl.current_rpm(Provider.GROQ)
         assert rpm == 1
 

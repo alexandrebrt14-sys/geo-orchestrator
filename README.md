@@ -2,6 +2,9 @@
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
 ![LLMs](https://img.shields.io/badge/LLMs-5_providers-ff6b35)
+![Tests](https://img.shields.io/badge/tests-140%20passed-brightgreen.svg)
+![Coverage](https://img.shields.io/badge/coverage-53%25-yellow.svg)
+[![CI](https://github.com/alexandrebrt14-sys/geo-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/alexandrebrt14-sys/geo-orchestrator/actions/workflows/tests.yml)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
 Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude Sonnet 4.5, routes each task to the most appropriate LLM (8 models across 5 providers) based on **complexity-aware tier routing** + **80% provider concentration cap** + adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, FinOps governance and **WhatsApp/email alerts** on budget thresholds.

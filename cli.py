@@ -480,6 +480,309 @@ def resume(checkpoint: str, no_smart: bool, output_dir: str):
 
 
 @cli.command()
+@click.option("--host", default="0.0.0.0", show_default=True, help="Bind host.")
+@click.option("--port", default=8080, show_default=True, type=int, help="Bind port.")
+def serve(host: str, port: int):
+    """Sprint 7 (2026-04-08): sobe servidor HTTP /health + /metrics.
+
+    Endpoints:
+
+    \b
+    - GET /health   -> 200 (OK/ATENCAO), 503 (CRITICO). Mesmo dado do `cli doctor`.
+    - GET /metrics  -> KPI timeseries dos ultimos 20 runs (.kpi_history.jsonl).
+    - GET /         -> docs minimos.
+
+    Stdlib http.server (zero deps adicionais). Para producao com volume,
+    rodar atras de nginx ou trocar por uvicorn+fastapi mantendo o mesmo
+    contrato JSON.
+    """
+    from src.health_server import run_server
+    console.print(f"[cyan]geo-orchestrator health server em http://{host}:{port}[/cyan]")
+    console.print("[dim]GET /health · GET /metrics · GET /[/dim]")
+    console.print("[dim]Ctrl-C para encerrar[/dim]\n")
+    run_server(host=host, port=port)
+
+
+@cli.command()
+@click.option("--strict", is_flag=True, help="Sai com codigo 1 se algum check estiver em ATENCAO ou CRITICO.")
+@click.option("--json", "as_json", is_flag=True, help="Saida JSON estruturada (para CI/cron).")
+def doctor(strict: bool, as_json: bool):
+    """Sprint 6 (2026-04-08): health check abrangente do sistema.
+
+    Verifica em uma unica chamada:
+
+    \b
+    - API keys dos 5 LLMs canonicos (presenca, nao conteudo)
+    - Catalog YAML consistente com src/config.LLM_CONFIGS
+    - FinOps daily limits saudaveis (< 80% por provider)
+    - KPI history existe e tem entries recentes
+    - Cost calibration aplicada (idade < 30 dias)
+    - Drift detector verde
+
+    Saida humana por default. `--json` para CI/cron. `--strict` faz exit 1
+    em qualquer ATENCAO/CRITICO — adequado para Task Scheduler/CI gating.
+    """
+    checks: list[dict] = []
+
+    # 1. API keys
+    missing_keys = []
+    for name, cfg in LLM_CONFIGS.items():
+        if not _check_api_key(cfg.api_key_env):
+            missing_keys.append(name)
+    if not missing_keys:
+        checks.append({"name": "api_keys", "status": "OK",
+                       "detail": f"{len(LLM_CONFIGS)} LLMs configurados"})
+    else:
+        checks.append({"name": "api_keys", "status": "CRITICO",
+                       "detail": f"chaves ausentes: {', '.join(missing_keys)}"})
+
+    # 2. Catalog YAML consistency
+    try:
+        from src.catalog_loader import validate_catalog_vs_config
+        errors = validate_catalog_vs_config()
+        if not errors:
+            checks.append({"name": "catalog_consistency", "status": "OK",
+                           "detail": "catalog YAML alinhado com LLM_CONFIGS"})
+        else:
+            checks.append({"name": "catalog_consistency", "status": "ATENCAO",
+                           "detail": f"{len(errors)} divergencias: {errors[0]}"})
+    except Exception as exc:
+        checks.append({"name": "catalog_consistency", "status": "ATENCAO",
+                       "detail": f"validator falhou: {exc}"})
+
+    # 3. FinOps daily limits
+    try:
+        fo = get_finops()
+        status_data = fo.daily_status()
+        max_pct = 0.0
+        offender = None
+        for provider, data in status_data.items():
+            if provider.startswith("_"):
+                continue
+            pct = data.get("usage_pct", 0)
+            if pct > max_pct:
+                max_pct = pct
+                offender = provider
+        if max_pct < 80:
+            checks.append({"name": "finops_daily", "status": "OK",
+                           "detail": f"max {max_pct:.0f}% ({offender})"})
+        elif max_pct < 95:
+            checks.append({"name": "finops_daily", "status": "ATENCAO",
+                           "detail": f"{offender} em {max_pct:.0f}% do limite"})
+        else:
+            checks.append({"name": "finops_daily", "status": "CRITICO",
+                           "detail": f"{offender} bloqueado em {max_pct:.0f}%"})
+    except Exception as exc:
+        checks.append({"name": "finops_daily", "status": "ATENCAO",
+                       "detail": f"FinOps inacessivel: {exc}"})
+
+    # 4. KPI history freshness
+    try:
+        from src.kpi_history import KPI_HISTORY_PATH, load_recent_entries
+        if not KPI_HISTORY_PATH.exists():
+            checks.append({"name": "kpi_history", "status": "ATENCAO",
+                           "detail": "nenhum historico — rode `cli.py run` ao menos 1x"})
+        else:
+            entries = load_recent_entries(n=5)
+            if not entries:
+                checks.append({"name": "kpi_history", "status": "ATENCAO",
+                               "detail": "historico vazio"})
+            else:
+                last_ts = entries[-1].get("timestamp", "")
+                checks.append({"name": "kpi_history", "status": "OK",
+                               "detail": f"{len(entries)} entries recentes, ultima: {last_ts[:19]}"})
+    except Exception as exc:
+        checks.append({"name": "kpi_history", "status": "ATENCAO",
+                       "detail": f"falha ao ler historico: {exc}"})
+
+    # 5. Cost calibration freshness
+    try:
+        from src.cost_calibrator import load_calibration, CALIBRATION_PATH
+        cal = load_calibration()
+        if cal is None:
+            checks.append({"name": "cost_calibration", "status": "ATENCAO",
+                           "detail": "nenhuma calibracao — rode `cli.py finops calibrate`"})
+        else:
+            n_calibrated = len(cal.get("calibrated_avg_cost_per_call", {}) or {})
+            last = cal.get("last_calibrated_at", "?")
+            try:
+                last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                from datetime import timezone as _tz
+                age_days = (datetime.now(_tz.utc) - last_dt).days
+            except Exception:
+                age_days = 999
+            if age_days <= 7:
+                checks.append({"name": "cost_calibration", "status": "OK",
+                               "detail": f"{n_calibrated} LLMs, recalibrado ha {age_days}d"})
+            elif age_days <= 30:
+                checks.append({"name": "cost_calibration", "status": "ATENCAO",
+                               "detail": f"calibracao desatualizada ({age_days}d)"})
+            else:
+                checks.append({"name": "cost_calibration", "status": "CRITICO",
+                               "detail": f"calibracao envelhecida ({age_days}d)"})
+    except Exception as exc:
+        checks.append({"name": "cost_calibration", "status": "ATENCAO",
+                       "detail": f"calibracao inacessivel: {exc}"})
+
+    # 6. Drift detector
+    try:
+        from src.kpi_history import detect_drift
+        drift = detect_drift()
+        if drift is None:
+            checks.append({"name": "drift_detector", "status": "OK",
+                           "detail": "cost_estimate_accuracy dentro da banda 0.7-1.5"})
+        else:
+            checks.append({"name": "drift_detector", "status": "ATENCAO",
+                           "detail": f"drift {drift['direction']}, media {drift['average']:.2f}x"})
+    except Exception as exc:
+        checks.append({"name": "drift_detector", "status": "ATENCAO",
+                       "detail": f"drift detector falhou: {exc}"})
+
+    # Output
+    has_critical = any(c["status"] == "CRITICO" for c in checks)
+    has_warning = any(c["status"] == "ATENCAO" for c in checks)
+    overall = "CRITICO" if has_critical else ("ATENCAO" if has_warning else "OK")
+
+    if as_json:
+        print(json.dumps({
+            "overall": overall,
+            "checks": checks,
+            "timestamp": datetime.now().isoformat(),
+        }, ensure_ascii=False, indent=2))
+    else:
+        table = Table(title="geo-orchestrator doctor")
+        table.add_column("Check", style="cyan")
+        table.add_column("Status")
+        table.add_column("Detalhe", style="dim")
+        for c in checks:
+            color = {"OK": "green", "ATENCAO": "yellow", "CRITICO": "red"}.get(c["status"], "white")
+            table.add_row(c["name"], f"[{color}]{c['status']}[/{color}]", c["detail"])
+        console.print(table)
+        overall_color = {"OK": "green", "ATENCAO": "yellow", "CRITICO": "red"}[overall]
+        console.print(f"\nStatus geral: [bold {overall_color}]{overall}[/bold {overall_color}]")
+
+    if strict and overall != "OK":
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("execution_id")
+@click.option("--output-dir", type=click.Path(), default="output", help="Diretorio onde estao os execution reports.")
+@click.option("--show-results", is_flag=True, help="Imprime tambem o output (truncado) de cada tarefa.")
+def replay(execution_id: str, output_dir: str, show_results: bool):
+    """Sprint 5 (2026-04-08): re-renderiza um execution report historico.
+
+    Aceita 3 formas de identificar o report:
+
+    \b
+    - Timestamp completo: `cli.py replay 20260408_103015`
+      Le diretamente output/execution_20260408_103015.json
+    - Caminho de arquivo: `cli.py replay path/to/execution_xxx.json`
+    - 'last' (alias): `cli.py replay last` -> ultimo execution_*.json
+
+    Nao re-executa LLMs, apenas le o JSON e renderiza o resumo no console
+    (mesmo formato do `cli.py run`). Util para auditoria, demos e
+    comparacao de runs sem custo adicional.
+    """
+    out_dir = Path(output_dir)
+    candidate: Path | None = None
+    if execution_id.lower() == "last":
+        files = sorted(out_dir.glob("execution_*.json"))
+        candidate = files[-1] if files else None
+    else:
+        p = Path(execution_id)
+        if p.is_file():
+            candidate = p
+        else:
+            # tenta como timestamp/id
+            candidate = out_dir / f"execution_{execution_id}.json"
+            if not candidate.exists():
+                # match parcial pelo prefixo
+                matches = sorted(out_dir.glob(f"execution_{execution_id}*.json"))
+                candidate = matches[-1] if matches else None
+
+    if candidate is None or not candidate.exists():
+        console.print(f"[red]Execution report nao encontrado:[/red] {execution_id}")
+        console.print(f"[dim]Procurado em: {out_dir}/execution_*.json[/dim]")
+        sys.exit(1)
+
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"[red]Falha ao ler {candidate}:[/red] {exc}")
+        sys.exit(1)
+
+    console.print(Panel(
+        f"[bold]{payload.get('demand', '?')[:200]}[/bold]\n\n"
+        f"Arquivo: {candidate.name}\n"
+        f"Timestamp: {payload.get('timestamp', '?')}",
+        title=f"Replay — {candidate.stem}",
+        border_style="cyan",
+    ))
+
+    totals = payload.get("totals", {}) or {}
+    results_dict = payload.get("results", {}) or {}
+    plan_dict = payload.get("plan", {}) or {}
+    plan_tasks = plan_dict.get("tasks", []) if isinstance(plan_dict, dict) else []
+    type_by_id = {t.get("id"): t.get("type", "?") for t in plan_tasks}
+
+    table = Table(title="Resumo (replay)")
+    table.add_column("Tarefa", style="cyan")
+    table.add_column("Tipo", style="dim")
+    table.add_column("LLM", style="green")
+    table.add_column("Status")
+    table.add_column("Tempo (s)", justify="right")
+    table.add_column("Tokens In", justify="right")
+    table.add_column("Tokens Out", justify="right")
+    table.add_column("Custo (US$)", justify="right")
+
+    for tid, r in results_dict.items():
+        success = r.get("success", False)
+        cache = r.get("cache_hit", False)
+        if success:
+            status_str = "[cyan]CACHE[/cyan]" if cache else "[green]OK[/green]"
+        else:
+            status_str = "[red]FALHA[/red]"
+        table.add_row(
+            tid,
+            type_by_id.get(tid, "?"),
+            r.get("llm_used", "?"),
+            status_str,
+            f"{(r.get('duration_ms') or 0) / 1000:.1f}",
+            str(r.get("tokens_input", 0)),
+            str(r.get("tokens_output", 0)),
+            f"{r.get('cost', 0):.4f}",
+        )
+
+    console.print()
+    console.print(table)
+
+    extras = Table(title="Totais", show_lines=False, box=None)
+    extras.add_column("Indicador", style="bold")
+    extras.add_column("Valor", justify="right")
+    extras.add_row("Tarefas concluidas", str(totals.get("tasks_completed", 0)))
+    extras.add_row("Tarefas falhas", str(totals.get("tasks_failed", 0)))
+    extras.add_row("Tarefas em cache", str(totals.get("tasks_cached", 0)))
+    extras.add_row("Custo estimado", f"US$ {totals.get('estimated_cost_usd', 0):.4f}")
+    extras.add_row("Custo real", f"US$ {totals.get('cost_usd', 0):.4f}")
+    extras.add_row("Tempo total", f"{(totals.get('duration_ms', 0)) / 1000:.1f}s")
+    extras.add_row("Limite de orcamento", f"US$ {totals.get('budget_limit', 0):.2f}")
+    console.print()
+    console.print(extras)
+
+    if show_results:
+        console.print()
+        for tid, r in results_dict.items():
+            output = (r.get("output") or "")[:1500]
+            if not output:
+                continue
+            console.print(Panel(
+                output, title=f"{tid} · {r.get('llm_used', '?')}",
+                border_style="dim",
+            ))
+
+
+@cli.command()
 @click.option("--ping", is_flag=True, help="Faz uma chamada minima a cada LLM para validar model_id e API key.")
 def status(ping: bool):
     """Mostra LLMs canonicos (LLM_CONFIGS) e seu status — alem do FinOps diario.
@@ -628,7 +931,19 @@ def cost_report():
     help="Exportar para CSV ou JSON em vez de renderizar tabela. Sprint 4: integra com Looker/Metabase.",
 )
 @click.option("--out", type=click.Path(), default=None, help="Caminho do arquivo de export. Default: stdout.")
-def dashboard(limit: int, export: str | None, out: str | None):
+@click.option(
+    "--since",
+    default=None,
+    help="Sprint 5: filtra runs por janela temporal (ex.: 24h, 7d, 30d). Aplica antes do --limit.",
+)
+@click.option(
+    "--html",
+    "html_path",
+    default=None,
+    type=click.Path(),
+    help="Sprint 7: gera dashboard HTML estatico em PATH (Chart.js inline, deployable).",
+)
+def dashboard(limit: int, export: str | None, out: str | None, since: str | None, html_path: str | None):
     """Dashboard CLI dos KPIs estruturais (.kpi_history.jsonl).
 
     Sprint 3 (2026-04-07): consome o jsonl de historico gravado pelo
@@ -654,9 +969,44 @@ def dashboard(limit: int, export: str | None, out: str | None):
         console.print("[dim]Rode 'cli.py run' pelo menos uma vez para gerar entradas.[/dim]")
         return
 
-    entries = load_recent_entries(n=limit)
+    # Sprint 5 (2026-04-08): --since filtra por janela temporal antes do --limit
+    if since:
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        unit = since[-1].lower()
+        try:
+            qty = int(since[:-1])
+        except ValueError:
+            console.print(f"[red]Formato invalido para --since: {since!r}. Use 24h, 7d, 30d.[/red]")
+            return
+        deltas = {"h": _td(hours=qty), "d": _td(days=qty), "w": _td(weeks=qty)}
+        if unit not in deltas:
+            console.print(f"[red]Unidade desconhecida em --since: {unit!r}. Use h, d ou w.[/red]")
+            return
+        cutoff = _dt.now(_tz.utc) - deltas[unit]
+        all_entries = load_recent_entries(n=10_000)
+
+        def _ts(e):
+            try:
+                ts = e.get("timestamp", "")
+                return _dt.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+        filtered = [e for e in all_entries if (_ts(e) is not None and _ts(e) >= cutoff)]
+        entries = filtered[-limit:]
+        console.print(f"[dim]--since {since}: {len(entries)} runs em janela (cutoff {cutoff.isoformat()})[/dim]")
+    else:
+        entries = load_recent_entries(n=limit)
     if not entries:
         console.print("[yellow]Historico vazio.[/yellow]")
+        return
+
+    # Sprint 7: export HTML estatico
+    if html_path:
+        from src.dashboard_html import render_dashboard_html
+        render_dashboard_html(entries=entries, output_path=Path(html_path))
+        console.print(f"[green]Dashboard HTML salvo em {html_path}[/green]")
+        console.print(f"[dim]{len(entries)} runs renderizados. Abra no navegador.[/dim]")
         return
 
     # Sprint 4: export csv/json
@@ -670,6 +1020,8 @@ def dashboard(limit: int, export: str | None, out: str | None):
             cols = [
                 "timestamp", "demand", "distribution_health", "cost_estimate_accuracy",
                 "tier_internal_engagement_rate", "fallback_chain_save_rate_cumulative",
+                # Sprint 5 (2026-04-08): novos KPIs
+                "quality_judge_pass", "parallelism_efficiency",
                 "real_cost_usd", "estimated_cost_usd", "duration_ms",
                 "tasks_completed", "tasks_failed",
             ]
@@ -694,6 +1046,8 @@ def dashboard(limit: int, export: str | None, out: str | None):
     table.add_column("Accuracy", justify="right")
     table.add_column("Tier%", justify="right")  # Sprint 4: tier_internal_engagement_rate
     table.add_column("Save%", justify="right")  # Sprint 4: fallback_chain_save_rate_cumulative
+    table.add_column("QJ", justify="right")     # Sprint 5: quality_judge_pass
+    table.add_column("Par", justify="right")    # Sprint 5: parallelism_efficiency (speedup)
     table.add_column("Custo", justify="right")
     table.add_column("LLMs", justify="center")
     table.add_column("Max%", justify="right")
@@ -708,6 +1062,9 @@ def dashboard(limit: int, export: str | None, out: str | None):
         # Sprint 4: novos KPIs
         tier_rate = e.get("tier_internal_engagement_rate", 0)
         save_rate = e.get("fallback_chain_save_rate_cumulative", 0)
+        # Sprint 5: novos KPIs
+        qj_pass = e.get("quality_judge_pass")  # 1.0 / 0.0 / None
+        par_eff = e.get("parallelism_efficiency", 0)
 
         # Cores: verde se saudavel, amarelo atencao, vermelho ruim
         health_color = "green" if health >= 0.95 else ("yellow" if health >= 0.8 else "red")
@@ -720,6 +1077,20 @@ def dashboard(limit: int, export: str | None, out: str | None):
         max_color = "red" if max_share > 0.80 else ("yellow" if max_share > 0.60 else "green")
         tier_color = "green" if tier_rate >= 0.4 else ("yellow" if tier_rate > 0 else "dim")
         save_color = "green" if save_rate > 0.2 else "dim"
+        # Sprint 5 colors
+        if qj_pass is None:
+            qj_label = "[dim]—[/dim]"
+        elif qj_pass >= 1.0:
+            qj_label = "[green]PASS[/green]"
+        else:
+            qj_label = "[red]FAIL[/red]"
+        if par_eff >= 2.0:
+            par_color = "green"
+        elif par_eff >= 1.2:
+            par_color = "yellow"
+        else:
+            par_color = "dim"
+        par_label = f"[{par_color}]{par_eff:.1f}x[/{par_color}]" if par_eff else "[dim]—[/dim]"
         tasks_total = e.get("tasks_completed", 0) + e.get("tasks_failed", 0)
         failed = e.get("tasks_failed", 0)
         task_label = f"{tasks_total - failed}/{tasks_total}" if tasks_total else "—"
@@ -732,6 +1103,8 @@ def dashboard(limit: int, export: str | None, out: str | None):
             f"[{acc_color}]{accuracy:.2f}x[/{acc_color}]",
             f"[{tier_color}]{tier_rate*100:.0f}%[/{tier_color}]",
             f"[{save_color}]{save_rate*100:.0f}%[/{save_color}]",
+            qj_label,
+            par_label,
             f"${e.get('real_cost_usd', 0):.4f}",
             f"{used}/5",
             f"[{max_color}]{max_share*100:.0f}%[/{max_color}]",
@@ -867,6 +1240,70 @@ def finops_reset():
     fo = get_finops()
     fo.reset_daily()
     console.print("[green]Contadores diarios resetados com sucesso.[/green]")
+
+
+@finops.command(name="calibrate")
+@click.option("--window", default=30, show_default=True, help="Numero de execution_*.json recentes a varrer.")
+def finops_calibrate(window: int):
+    """Sprint 5 (2026-04-08): recalibra AVG_COST_PER_CALL a partir do historico real.
+
+    Varre os ultimos N execution reports em output/, agrupa custos por LLM
+    e persiste output/.cost_calibration.json. As proximas execucoes do
+    orchestrator passarao a usar essa tabela calibrada no pre_check do
+    FinOps e no _estimate_cost.
+
+    LLMs com amostra menor que MIN_SAMPLE (3) ficam com o default estatico.
+    """
+    from src.cost_calibrator import recalibrate, CALIBRATION_PATH
+
+    payload = recalibrate(window=window)
+    table = Table(title=f"Calibracao FinOps — {payload['sources_scanned']} reports varridos")
+    table.add_column("LLM", style="cyan")
+    table.add_column("Amostras", justify="right")
+    table.add_column("Default (US$/call)", justify="right")
+    table.add_column("Calibrado (US$/call)", justify="right")
+    table.add_column("Delta", justify="right")
+
+    statics = payload["static_defaults"]
+    calibrated = payload["calibrated_avg_cost_per_call"]
+    samples = payload["sample_sizes"]
+    all_llms = sorted(set(statics.keys()) | set(samples.keys()))
+    for llm in all_llms:
+        s = samples.get(llm, 0)
+        d = statics.get(llm, 0.0)
+        c = calibrated.get(llm)
+        if c is None:
+            cal_str = "[dim]—[/dim]"
+            delta_str = "[dim]insuficiente[/dim]"
+        else:
+            cal_str = f"{c:.6f}"
+            if d > 0:
+                delta = (c - d) / d * 100
+                color = "red" if abs(delta) > 50 else ("yellow" if abs(delta) > 20 else "green")
+                delta_str = f"[{color}]{delta:+.0f}%[/{color}]"
+            else:
+                delta_str = "—"
+        table.add_row(llm, str(s), f"{d:.6f}", cal_str, delta_str)
+
+    console.print(table)
+    console.print(f"\nCalibracao persistida em: [cyan]{CALIBRATION_PATH}[/cyan]")
+    console.print(f"[dim]Window={payload['window']}, MIN_SAMPLE={payload['min_sample']}[/dim]")
+
+
+@finops.command(name="calibrate-rollback")
+def finops_calibrate_rollback():
+    """Sprint 7 (2026-04-08): restaura o backup do .cost_calibration.json.
+
+    Util quando uma calibracao automatica do auto-trigger introduziu valores
+    piores que o default. O backup e gerado automaticamente antes de cada
+    `finops calibrate` ou auto-trigger via `recalibrate(persist=True)`.
+    """
+    from src.cost_calibrator import rollback_calibration, CALIBRATION_BACKUP_PATH
+    if rollback_calibration():
+        console.print(f"[green]Rollback aplicado a partir de {CALIBRATION_BACKUP_PATH}[/green]")
+    else:
+        console.print(f"[yellow]Nenhum backup encontrado em {CALIBRATION_BACKUP_PATH}[/yellow]")
+        sys.exit(1)
 
 
 @finops.command(name="report")

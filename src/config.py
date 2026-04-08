@@ -107,8 +107,10 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         model="sonar-pro",
         api_key_env="PERPLEXITY_API_KEY",
         strengths=["live_research", "fact_checking", "citations", "web_search"],
-        cost_per_1k_input=0.001,
-        cost_per_1k_output=0.001,
+        # Sprint 5 (2026-04-08): aligned to catalog/model_catalog.yaml SoT.
+        # Antes: 0.001/0.001 (incorreto — subestimava custo real ~3x).
+        cost_per_1k_input=0.003,
+        cost_per_1k_output=0.015,
         max_tokens=4096,
         role="Pesquisador. Busca ao vivo com fontes, verificacao de fatos e citacoes.",
     ),
@@ -150,6 +152,32 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         role="Haiku 4.5 — tier mais barato da familia Claude. ~19x mais barato que Opus, ideal para low-complexity (triagem, classificacao, summarization).",
     ),
 }
+
+# Sprint 7 (2026-04-08): tenta substituir LLM_CONFIGS pelo catalog runtime.
+# Se PyYAML estiver disponivel e o catalog YAML existir, usamos ele como SoT.
+# Caso contrario, fallback para o dict hardcoded acima (mantem retro-compat).
+# As metadatas `strengths` e `role` continuam vindo dos defaults estaticos.
+# Set GEO_DISABLE_CATALOG_RUNTIME=1 para forcar uso do dict hardcoded.
+if not os.environ.get("GEO_DISABLE_CATALOG_RUNTIME"):
+    try:
+        from .catalog_loader import build_llm_configs_from_catalog  # noqa: E402
+        _strengths = {k: cfg.strengths for k, cfg in LLM_CONFIGS.items()}
+        _roles = {k: cfg.role for k, cfg in LLM_CONFIGS.items()}
+        _from_catalog = build_llm_configs_from_catalog(
+            strengths_overrides=_strengths,
+            role_overrides=_roles,
+        )
+        if _from_catalog and len(_from_catalog) >= len(LLM_CONFIGS):
+            LLM_CONFIGS = _from_catalog
+            logger.info(
+                "config: LLM_CONFIGS carregado do catalog YAML (%d aliases)",
+                len(LLM_CONFIGS),
+            )
+    except Exception as _exc:
+        logger.warning(
+            "config: catalog runtime nao disponivel (fallback para dict hardcoded): %s",
+            _exc,
+        )
 
 
 # ---------------------------------------------------------------------------

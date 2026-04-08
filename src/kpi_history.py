@@ -118,6 +118,74 @@ def compute_tier_internal_engagement_rate(llm_usage: dict[str, int]) -> tuple[fl
     }
 
 
+def compute_quality_judge_pass_rate(
+    quality_verdict: str | None,
+    pass_verdicts: tuple[str, ...] = (
+        # PT-BR verdicts reais do QualityJudge (src/quality_judge.py)
+        "aprovado", "aprovado_com_ressalvas",
+        # Aliases EN para compatibilidade com mocks/testes
+        "approved", "good", "excellent", "pass",
+    ),
+) -> float | None:
+    """Sprint 5 (2026-04-08): pass rate do Quality Judge por run.
+
+    Retorna 1.0 se o verdict do Quality Judge esta entre os aceitos,
+    0.0 se rejeitou, None se o judge nao foi invocado nesta run.
+
+    Aceita verdicts PT-BR canonicos do QualityJudge real ("APROVADO",
+    "APROVADO_COM_RESSALVAS", "REPROVADO") + aliases EN para mocks.
+
+    A medida acumulativa (taxa media nos ultimos N runs) e calculada
+    pelo dashboard a partir do .kpi_history.jsonl.
+    """
+    if not quality_verdict:
+        return None
+    return 1.0 if quality_verdict.strip().lower() in pass_verdicts else 0.0
+
+
+def compute_parallelism_efficiency(
+    wave_timings: list[dict] | None,
+    task_durations_ms: list[int] | None,
+    total_duration_ms: int,
+) -> tuple[float, dict]:
+    """Sprint 5 (2026-04-08): speedup do pipeline em waves vs execucao sequencial.
+
+    speedup = sum(task_duration_ms) / max(total_duration_ms, 1)
+
+    - 1.0 = nenhum ganho (tudo sequencial)
+    - 5.0 = 5x mais rapido que sequencial (5 tarefas paralelas perfeitas)
+    - Range tipico do orchestrator: 2.0 a 4.5 (5 LLMs, mas waves > 1)
+
+    Tambem retorna metadata com max wave width (gargalo de paralelizacao).
+    """
+    if not task_durations_ms:
+        return 0.0, {"task_count": 0, "max_wave_width": 0, "wave_count": 0, "sequential_ms": 0}
+
+    sequential_ms = sum(d for d in task_durations_ms if d)
+    if total_duration_ms <= 0:
+        return 0.0, {
+            "task_count": len(task_durations_ms),
+            "max_wave_width": 0,
+            "wave_count": 0,
+            "sequential_ms": sequential_ms,
+        }
+
+    speedup = sequential_ms / total_duration_ms
+    max_wave_width = 0
+    wave_count = 0
+    if wave_timings:
+        wave_count = len(wave_timings)
+        widths = [len(w.get("task_ids", []) or []) for w in wave_timings]
+        max_wave_width = max(widths) if widths else 0
+
+    return round(speedup, 4), {
+        "task_count": len(task_durations_ms),
+        "max_wave_width": max_wave_width,
+        "wave_count": wave_count,
+        "sequential_ms": sequential_ms,
+    }
+
+
 def compute_fallback_save_rate(fallback_saves: int, total_runs: int) -> float:
     """Sprint 4 (2026-04-07): % de runs onde a fallback chain salvou >= 1 task.
 
@@ -141,6 +209,9 @@ def append_kpi_entry(
     tasks_completed: int,
     tasks_failed: int,
     fallback_saves: int = 0,
+    quality_verdict: str | None = None,
+    wave_timings: list[dict] | None = None,
+    task_durations_ms: list[int] | None = None,
     history_path: Path | None = None,
 ) -> dict:
     """Acrescenta uma entrada ao .kpi_history.jsonl e retorna o registro escrito.
@@ -157,6 +228,10 @@ def append_kpi_entry(
     health, health_meta = compute_distribution_health(llm_usage)
     accuracy = compute_cost_estimate_accuracy(real_cost, estimated_cost)
     tier_rate, tier_meta = compute_tier_internal_engagement_rate(llm_usage)
+    qj_pass = compute_quality_judge_pass_rate(quality_verdict)
+    par_eff, par_meta = compute_parallelism_efficiency(
+        wave_timings, task_durations_ms, duration_ms
+    )
 
     # Acumulado: le entries anteriores e soma fallback_saves
     prior = load_recent_entries(n=1000, history_path=path)
@@ -172,21 +247,26 @@ def append_kpi_entry(
         "tier_internal_engagement_rate": tier_rate,
         "fallback_saves": fallback_saves,
         "fallback_chain_save_rate_cumulative": save_rate,
+        # Sprint 5 (2026-04-08): 2 KPIs novos
+        "quality_judge_pass": qj_pass,  # 1.0 / 0.0 / None por run
+        "parallelism_efficiency": par_eff,  # speedup vs sequencial (>=1.0)
         "real_cost_usd": round(real_cost, 4),
         "estimated_cost_usd": round(estimated_cost, 4),
         "duration_ms": duration_ms,
         "tasks_completed": tasks_completed,
         "tasks_failed": tasks_failed,
         "llm_usage": dict(llm_usage),
-        "_meta": {**health_meta, **tier_meta},
+        "_meta": {**health_meta, **tier_meta, **par_meta},
     }
 
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     logger.info(
-        "KPI HISTORY: health=%.4f accuracy=%.2fx tier_engagement=%.0f%% fallback_saves=%d (cumulative_rate=%.0f%%)",
+        "KPI HISTORY: health=%.4f accuracy=%.2fx tier_engagement=%.0f%% fallback_saves=%d "
+        "(cumulative_rate=%.0f%%) qj_pass=%s parallelism_efficiency=%.2fx",
         health, accuracy, tier_rate * 100, fallback_saves, save_rate * 100,
+        ("-" if qj_pass is None else f"{qj_pass:.0f}"), par_eff,
     )
     return entry
 

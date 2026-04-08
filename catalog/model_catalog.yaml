@@ -1,94 +1,120 @@
 # Model Catalog — Single Source of Truth
 # All pricing, routing, budgets and capabilities derive from this file.
+# Sprint 5 (2026-04-08): re-sincronizado com src/config.LLM_CONFIGS canonicos.
 # Generated artifacts: config.py tables, README pricing, site page, CLI help.
-# Last verified: 2026-04-04
 
-version: "1.0"
-last_updated: "2026-04-04"
+version: "2.0"
+last_updated: "2026-04-08"
 
 providers:
   anthropic:
     display_name: "Anthropic"
+    api_key_env: ANTHROPIC_API_KEY
     models:
-      claude-opus-4-20250514:
+      claude-opus-4-6:
         display: "Claude Opus 4.6"
         input_cost_per_mtok: 15.00
         output_cost_per_mtok: 75.00
-        max_tokens: 32000
-        rpm: 50
+        max_tokens: 8192
+        rpm: 60
         capabilities: [architecture, code_generation, review, deep_reasoning]
         tier: premium
+        complexity_min: 4
+        config_alias: claude
         status: active
-      claude-sonnet-4-20250514:
-        display: "Claude Sonnet 4"
+      claude-sonnet-4-6:
+        display: "Claude Sonnet 4.6"
         input_cost_per_mtok: 3.00
         output_cost_per_mtok: 15.00
-        max_tokens: 16000
+        max_tokens: 8192
         rpm: 100
-        capabilities: [writing, analysis, classification, code_generation]
+        capabilities: [writing, analysis, classification, code_generation, review]
         tier: standard
+        complexity_min: 3
+        config_alias: claude_sonnet
         status: active
-      claude-haiku-4-5-20251001:
+      claude-haiku-4-5:
         display: "Claude Haiku 4.5"
         input_cost_per_mtok: 0.80
         output_cost_per_mtok: 4.00
-        max_tokens: 8000
+        max_tokens: 8192
         rpm: 200
-        capabilities: [classification, summarization, translation]
+        capabilities: [classification, summarization, translation, simple_code]
         tier: economy
+        complexity_min: 1
+        config_alias: claude_haiku
         status: active
 
   openai:
     display_name: "OpenAI"
+    api_key_env: OPENAI_API_KEY
     models:
       gpt-4o:
         display: "GPT-4o"
         input_cost_per_mtok: 2.50
         output_cost_per_mtok: 10.00
-        max_tokens: 16000
-        rpm: 100
-        capabilities: [writing, seo, copywriting, analysis]
+        max_tokens: 8192
+        rpm: 60
+        capabilities: [writing, seo, copywriting, analysis, translation]
         tier: standard
+        config_alias: gpt4o
         status: active
 
   google:
     display_name: "Google"
+    api_key_env: GOOGLE_AI_API_KEY
     models:
       gemini-2.5-pro:
         display: "Gemini 2.5 Pro"
         input_cost_per_mtok: 1.25
         output_cost_per_mtok: 5.00
         max_tokens: 16384
-        rpm: 100
+        rpm: 30
         capabilities: [deep_analysis, data_processing, classification, summarization, reasoning]
         tier: standard
+        config_alias: gemini
         status: active
+        notes: "Sempre Pro (nunca Flash) — feedback 2026-03-21"
 
   perplexity:
     display_name: "Perplexity"
+    api_key_env: PERPLEXITY_API_KEY
     models:
       sonar-pro:
         display: "Sonar Pro"
         input_cost_per_mtok: 3.00
         output_cost_per_mtok: 15.00
-        max_tokens: 4000
+        max_tokens: 4096
         rpm: 20
-        capabilities: [research, live_search, citations]
+        capabilities: [research, live_search, citations, fact_check]
         tier: standard
+        config_alias: perplexity
         status: active
 
   groq:
     display_name: "Groq"
+    api_key_env: GROQ_API_KEY
     models:
       llama-3.3-70b-versatile:
         display: "Llama 3.3 70B"
         input_cost_per_mtok: 0.59
         output_cost_per_mtok: 0.79
-        max_tokens: 8000
-        rpm: 30
-        capabilities: [classification, summarization, translation]
+        max_tokens: 8192
+        rpm: 300
+        capabilities: [classification, summarization, translation, fast_inference]
         tier: economy
+        config_alias: groq
         status: active
+
+# Tier interno por familia (Sprint 3 — runtime). Acionado automaticamente
+# por SmartRouter / Router._apply_claude_tier baseado em task.complexity.
+tier_routing:
+  claude_family:
+    "1": claude-haiku-4-5
+    "2": claude-haiku-4-5
+    "3": claude-sonnet-4-6
+    "4": claude-opus-4-6
+    "5": claude-opus-4-6
 
 # Task routing — capabilities required per task type
 task_routing:
@@ -107,7 +133,7 @@ task_routing:
   architecture:
     required_capabilities: [architecture, deep_reasoning]
     preferred_provider: anthropic
-    model_override: claude-opus-4-20250514
+    model_override: claude-opus-4-6
     fallback: [openai]
   code_generation:
     required_capabilities: [code_generation]
@@ -133,18 +159,33 @@ task_routing:
     required_capabilities: [data_processing]
     preferred_provider: google
     fallback: [groq]
+  fact_check:
+    required_capabilities: [fact_check, live_search]
+    preferred_provider: perplexity
+    fallback: [google]
 
-# Budget limits
+# Budget limits — alinhados com src/config.FINOPS_DAILY_LIMITS (sprint 5)
 budgets:
   daily_limits:
-    anthropic: 5.00
+    anthropic: 2.00
     openai: 2.00
     google: 1.00
     perplexity: 1.00
     groq: 2.00
-    global: 10.00
-  per_run_max: 15.00
+    global: 8.00
+  per_run_max: 5.00
   alert_threshold: 0.80  # Alert at 80% of daily limit
+  block_threshold: 0.95
+
+# Provider concentration cap (sprint 2)
+caps:
+  default_share: 0.80
+  per_provider:
+    anthropic: 0.80
+    openai: 0.80
+    google: 0.80
+    perplexity: 0.80
+    groq: 0.80
 
 # Operational modes
 modes:
@@ -153,7 +194,7 @@ modes:
     force_all_models: false
     max_retries: 3
   showcase:
-    description: "Force usage of all 5 models for demonstration"
+    description: "Force usage of all 5 providers for demonstration"
     force_all_models: true
     max_retries: 2
   exploration:

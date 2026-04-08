@@ -8,3 +8,11 @@ output/
 dist/
 build/
 .venv/
+.coverage
+htmlcov/
+# Dumps de extracao ad-hoc (nao codigo de producao)
+T5_T8_*
+EXTRACT_T5_T8_SUMMARY.md
+INDICE_EXTRACAO.md
+RELATORIO_EXTRACAO.txt
+COMO_USAR.md

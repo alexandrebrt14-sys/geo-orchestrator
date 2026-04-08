@@ -149,10 +149,13 @@ class FinOps:
         Raises:
             BudgetExceededError: If estimated cost exceeds BUDGET_LIMIT.
         """
+        # Sprint 5 (2026-04-08): usa AVG calibrado a partir do historico real
+        from .cost_calibrator import get_calibrated_avg_cost
+        avg_table = get_calibrated_avg_cost()
         if llm_names:
-            avg = sum(AVG_COST_PER_CALL.get(n, 0.01) for n in llm_names) / len(llm_names)
+            avg = sum(avg_table.get(n, 0.01) for n in llm_names) / len(llm_names)
         else:
-            avg = sum(AVG_COST_PER_CALL.values()) / len(AVG_COST_PER_CALL)
+            avg = sum(avg_table.values()) / len(avg_table)
 
         estimated = task_count * avg
         self._session_estimated = estimated
@@ -238,10 +241,12 @@ class FinOps:
 
         Returns None if all providers are exhausted.
         """
+        from .cost_calibrator import get_calibrated_avg_cost
+        avg_table = get_calibrated_avg_cost()
         candidates: list[tuple[str, float]] = []
         for llm_name, cfg in LLM_CONFIGS.items():
             if cfg.available and self.is_provider_available(llm_name):
-                avg_cost = AVG_COST_PER_CALL.get(llm_name, 0.01)
+                avg_cost = avg_table.get(llm_name, 0.01)
                 candidates.append((llm_name, avg_cost))
 
         if not candidates:
