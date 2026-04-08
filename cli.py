@@ -621,7 +621,14 @@ def cost_report():
 
 @cli.command()
 @click.option("--limit", "-n", default=20, help="Numero de runs recentes a exibir.")
-def dashboard(limit: int):
+@click.option(
+    "--export",
+    type=click.Choice(["csv", "json"], case_sensitive=False),
+    default=None,
+    help="Exportar para CSV ou JSON em vez de renderizar tabela. Sprint 4: integra com Looker/Metabase.",
+)
+@click.option("--out", type=click.Path(), default=None, help="Caminho do arquivo de export. Default: stdout.")
+def dashboard(limit: int, export: str | None, out: str | None):
     """Dashboard CLI dos KPIs estruturais (.kpi_history.jsonl).
 
     Sprint 3 (2026-04-07): consome o jsonl de historico gravado pelo
@@ -630,6 +637,10 @@ def dashboard(limit: int):
       cost_estimate_accuracy, real_cost, used_llms, max_share.
     - Card de status agregado (saudavel / atencao / drift).
     - Alerta visual se 3 runs consecutivos saem da banda 0.7-1.5x.
+
+    Sprint 4 (2026-04-07): novas colunas tier_internal_engagement_rate
+    e fallback_chain_save_rate. Flag --export csv|json para integrar
+    com dashboards externos (Looker/Metabase).
     """
     from src.kpi_history import (
         load_recent_entries, detect_drift,
@@ -648,12 +659,41 @@ def dashboard(limit: int):
         console.print("[yellow]Historico vazio.[/yellow]")
         return
 
+    # Sprint 4: export csv/json
+    if export:
+        import csv as _csv
+        import io as _io
+        if export.lower() == "json":
+            payload = json.dumps(entries, ensure_ascii=False, indent=2)
+        else:
+            buf = _io.StringIO()
+            cols = [
+                "timestamp", "demand", "distribution_health", "cost_estimate_accuracy",
+                "tier_internal_engagement_rate", "fallback_chain_save_rate_cumulative",
+                "real_cost_usd", "estimated_cost_usd", "duration_ms",
+                "tasks_completed", "tasks_failed",
+            ]
+            writer = _csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+            writer.writeheader()
+            for e in entries:
+                writer.writerow({c: e.get(c, "") for c in cols})
+            payload = buf.getvalue()
+
+        if out:
+            Path(out).write_text(payload, encoding="utf-8")
+            console.print(f"[green]Exportado {len(entries)} entradas para {out}[/green]")
+        else:
+            print(payload)
+        return
+
     table = Table(title=f"KPI History — ultimos {len(entries)} runs")
     table.add_column("#", style="dim", width=3)
     table.add_column("Timestamp", style="cyan", width=19)
     table.add_column("Demanda", style="white")
     table.add_column("Health", justify="right")
     table.add_column("Accuracy", justify="right")
+    table.add_column("Tier%", justify="right")  # Sprint 4: tier_internal_engagement_rate
+    table.add_column("Save%", justify="right")  # Sprint 4: fallback_chain_save_rate_cumulative
     table.add_column("Custo", justify="right")
     table.add_column("LLMs", justify="center")
     table.add_column("Max%", justify="right")
@@ -665,6 +705,9 @@ def dashboard(limit: int):
         max_share = meta.get("max_share", 0)
         health = e.get("distribution_health", 0)
         accuracy = e.get("cost_estimate_accuracy", 0)
+        # Sprint 4: novos KPIs
+        tier_rate = e.get("tier_internal_engagement_rate", 0)
+        save_rate = e.get("fallback_chain_save_rate_cumulative", 0)
 
         # Cores: verde se saudavel, amarelo atencao, vermelho ruim
         health_color = "green" if health >= 0.95 else ("yellow" if health >= 0.8 else "red")
@@ -675,6 +718,8 @@ def dashboard(limit: int):
         else:
             acc_color = "red"
         max_color = "red" if max_share > 0.80 else ("yellow" if max_share > 0.60 else "green")
+        tier_color = "green" if tier_rate >= 0.4 else ("yellow" if tier_rate > 0 else "dim")
+        save_color = "green" if save_rate > 0.2 else "dim"
         tasks_total = e.get("tasks_completed", 0) + e.get("tasks_failed", 0)
         failed = e.get("tasks_failed", 0)
         task_label = f"{tasks_total - failed}/{tasks_total}" if tasks_total else "—"
@@ -685,6 +730,8 @@ def dashboard(limit: int):
             e.get("demand", "")[:50] + ("…" if len(e.get("demand", "")) > 50 else ""),
             f"[{health_color}]{health:.2f}[/{health_color}]",
             f"[{acc_color}]{accuracy:.2f}x[/{acc_color}]",
+            f"[{tier_color}]{tier_rate*100:.0f}%[/{tier_color}]",
+            f"[{save_color}]{save_rate*100:.0f}%[/{save_color}]",
             f"${e.get('real_cost_usd', 0):.4f}",
             f"{used}/5",
             f"[{max_color}]{max_share*100:.0f}%[/{max_color}]",

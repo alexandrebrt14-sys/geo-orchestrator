@@ -75,6 +75,11 @@ class Pipeline:
             name: {"assigned": 0, "completed": 0, "tokens": 0, "cost": 0.0, "status": "idle"}
             for name in LLM_CONFIGS
         }
+        # Sprint 4 (2026-04-07): contador de "saves" da fallback chain.
+        # Incrementa toda vez que uma task SUCEDE com mais de 1 LLM em
+        # tried (i.e., a chain teve que iterar e o resultado final veio
+        # de uma alternativa, nao do primario). Mede resiliencia real.
+        self._fallback_saves: int = 0
 
     # ==================================================================
     # Status em tempo real
@@ -739,6 +744,16 @@ class Pipeline:
                 # Early termination: quality gate passes -> done
                 if self._quality_check(task, attempt_result):
                     result = attempt_result
+                    # Sprint 4 (2026-04-07): se a task SUCEDEU mas precisou
+                    # iterar a chain (>1 LLM em tried), conta como save da
+                    # fallback chain — primario falhou ou quality gate falhou
+                    # e o sistema se recuperou sozinho.
+                    if len(tried) > 1:
+                        self._fallback_saves += 1
+                        logger.info(
+                            "FALLBACK SAVE: task '%s' salvo apos iterar %d LLMs (chain: %s)",
+                            task_id, len(tried), " -> ".join(chain_log),
+                        )
                     logger.debug(
                         "Task '%s': %s passed quality gate. Chain: %s",
                         task_id, next_cfg.name, " > ".join(chain_log),

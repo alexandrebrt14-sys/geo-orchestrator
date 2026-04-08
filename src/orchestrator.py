@@ -82,14 +82,24 @@ REGRAS DE FEEDBACK SOCIAL (baseadas em Jaques, Social RL):
 - A tarefa de review DEVE verificar: acentuação, estilo de escrita, economia de tokens.
 - Se o revisor encontrar problemas, o output deve incluir "needs_revision" + instruções.
 
-REGRAS DE PARALELIZAÇÃO DE REVIEW (sprint 2 — 2026-04-07):
-- Quando a demanda exigir review final, decomponha em até 3 sub-reviews PARALELOS:
-  * review_acentuacao → classification (Groq, ~1s) — verifica só acentuação PT-BR
-  * review_codigo → review (Claude, ~10s) — verifica só código gerado
-  * review_estilo → analysis (Gemini, ~5s) — verifica tom, clareza, redundância
-- Estes 3 NÃO dependem entre si (mesma wave) — paraleliza wall clock total.
-- Use complexity baixa em sub-reviews (low/medium) para que tier interno
-  Claude downgrade para Sonnet/Haiku quando aplicavel.
+REGRAS DE PARALELIZAÇÃO DE REVIEW (sprint 2 + reforçada sprint 4 — 2026-04-07):
+- SEMPRE que a demanda envolver redação OU código gerado, OBRIGATORIAMENTE
+  decomponha o review final em 3 sub-reviews paralelos (mesma wave):
+  * review_acentuacao → classification (Groq llama, ~1s) — verifica APENAS
+    acentuação PT-BR completa, sem checar conteúdo. Output curto: lista
+    de palavras incorretas ou "ok".
+  * review_codigo → review (Claude, ~10s) — verifica APENAS o código
+    gerado: sintaxe, naming, edge cases. NÃO checa estilo de texto.
+  * review_estilo → analysis (Gemini, ~5s) — verifica tom editorial,
+    clareza, anti-padrões IA ("não se trata apenas de"), redundância.
+    NÃO checa código nem acentuação.
+- Os 3 sub-reviews NÃO dependem entre si — devem estar na MESMA wave para
+  paralelizar wall clock.
+- Marque cada sub-review com complexity LOW (review_acentuacao,
+  review_estilo) ou MEDIUM (review_codigo) para acionar tier interno
+  Claude (Sonnet/Haiku) automaticamente.
+- NÃO crie um único review monolitico de complexity HIGH — isso desperdiça
+  Opus em verificações que podem ser distribuídas.
 
 Tipos disponíveis: research, analysis, writing, copywriting, code, review, \
 seo, data_processing, fact_check, classification, translation, summarization.
@@ -139,7 +149,12 @@ class Orchestrator:
         self.router = self._router  # alias for pipeline compatibility
         if force_all_llms:
             self._router.set_force_all_llms(True)
-        self._claude_cfg = LLM_CONFIGS["claude"]
+        # Sprint 4 (2026-04-07): decompose() usa Sonnet 4.6 em vez de Opus.
+        # Sonnet e suficiente para decomposicao (a tarefa e estruturada,
+        # nao precisa raciocinio profundo). Economia de ~80% por chamada,
+        # multiplicada por TODA execucao do Orchestrator (1 decompose por run).
+        # Fallback para Opus se Sonnet nao estiver disponivel.
+        self._claude_cfg = LLM_CONFIGS.get("claude_sonnet") or LLM_CONFIGS["claude"]
         self._force = force  # bypass budget confirmation
         self._cache_dir = OUTPUT_DIR / ".cache"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -419,10 +434,11 @@ class Orchestrator:
         # v2.0 Enhanced status report
         usage = self._router.get_session_usage()
 
-        # Sprint 3 (2026-04-07): persistir KPIs estruturais + checar drift.
-        # KPIs: distribution_health (cobertura LLMs com penalidade de cap)
-        # e cost_estimate_accuracy (real/estimado).
+        # Sprint 3 + Sprint 4 (2026-04-07): persistir KPIs estruturais + drift.
+        # Sprint 4 adiciona tier_internal_engagement_rate e fallback_chain_save_rate.
         try:
+            # Sprint 4: lê fallback_saves do Pipeline (se executou)
+            fb_saves = getattr(pipeline, "_fallback_saves", 0) if tasks_to_run else 0
             kpi_entry = append_kpi_entry(
                 demand=demand,
                 real_cost=total_cost,
@@ -431,10 +447,10 @@ class Orchestrator:
                 llm_usage=usage,
                 tasks_completed=completed,
                 tasks_failed=failed,
+                fallback_saves=fb_saves,
             )
             drift_alert = detect_drift()
             if drift_alert:
-                # Anexa o alerta ao summary do report para o caller ver
                 report.summary = (
                     f"{report.summary}\n\n[ALERTA DRIFT] {drift_alert['recommended_action']}"
                 )

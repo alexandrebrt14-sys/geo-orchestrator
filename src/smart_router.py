@@ -185,31 +185,33 @@ class SmartRouter(Router):
         """Route task to best LLM without forcing all models.
 
         Routing strategy varies by tier:
-        - SIMPLE: use only the primary LLM for the task type.
-        - MODERATE: use primary, consider fallback if primary has high failure rate.
-        - COMPLEX: use adaptive scoring (_compute_score) + load balancing.
+        - SIMPLE: use only the primary LLM for the task type (TASK_TYPES.primary).
+        - MODERATE: primary, consider fallback if primary has high failure rate.
+        - COMPLEX: adaptive scoring + load balancing, restrito ao top da chain
+          (TASK_TYPES.primary primeiro, tier de complexity como segundo).
 
-        Args:
-            task: The task to route.
-            tier: The demand complexity tier.
-
-        Returns:
-            LLMConfig for the chosen LLM.
-
-        Raises:
-            RuntimeError: If no LLM is available.
+        Sprint 4 (2026-04-07): _route_complex agora restringe candidates aos
+        top 2 da get_fallback_chain (que ja prioriza TASK_TYPES.primary apos
+        o fix da sprint 1). Antes usava todos os 5 LLMs no scoring, fazendo
+        com que cost_score sequestrasse code/review para gpt4o no pre_check.
+        Apos escolher o LLM, aplica downgrade_claude_by_complexity para
+        que o pre_execution_check do FinOps estime com tier interno.
         """
         routing = TASK_TYPES.get(task.type)
-
-        # Check if feedback suggests a better LLM for this task type
         feedback_override = self._get_feedback_override(task.type)
 
         if tier == DemandTier.SIMPLE:
-            return self._route_simple(task, routing, feedback_override)
+            chosen_cfg = self._route_simple(task, routing, feedback_override)
         elif tier == DemandTier.MODERATE:
-            return self._route_moderate(task, routing, feedback_override)
+            chosen_cfg = self._route_moderate(task, routing, feedback_override)
         else:
-            return self._route_complex(task, routing, feedback_override)
+            chosen_cfg = self._route_complex(task, routing, feedback_override)
+
+        # Sprint 4: aplicar tier interno Claude tambem aqui (pre_check)
+        downgraded_name = self.downgrade_claude_by_complexity(chosen_cfg.name, task)
+        if downgraded_name != chosen_cfg.name:
+            return LLM_CONFIGS[downgraded_name]
+        return chosen_cfg
 
     def _route_simple(
         self,
@@ -298,43 +300,42 @@ class SmartRouter(Router):
         routing: object | None,
         feedback_override: str | None,
     ) -> LLMConfig:
-        """COMPLEX tier: adaptive scoring + load balancing across all viable LLMs."""
+        """COMPLEX tier: usa TASK_TYPES.primary canonico (sprint 4 fix).
+
+        Antes da sprint 4: _compute_score considerava TODOS os 5 LLMs e o
+        cost_score barato sequestrava code/review para gpt4o (mesmo bug que
+        get_fallback_chain tinha na sprint 1, mas no path do pre_check).
+        Mesmo restringindo aos top 2 candidates, gpt4o (avg_cost $0.0125)
+        ainda vencia claude (avg_cost $0.09) por ser mais barato.
+
+        Sprint 4 final: simplesmente usa chain[0] (primary canonico),
+        como o runtime ja faz em _run_task->get_next_in_chain. Pre_check
+        e runtime ficam consistentes — sem mais surpresas no FinOps estimate.
+
+        Feedback override forte (>= 2x MIN_SAMPLES) ainda pode sequestrar.
+        """
         if feedback_override and self._is_usable(feedback_override):
-            # Even in complex mode, a strong feedback signal wins
             feedback_entries = self._feedback_cache.get(
                 f"{task.type}:{feedback_override}", []
             )
             if len(feedback_entries) >= _FEEDBACK_MIN_SAMPLES * 2:
-                self.record_assignment(feedback_override)
                 logger.info(
                     "SMART[complex] task '%s' (%s) -> %s (strong feedback override, %d samples)",
                     task.id, task.type, feedback_override, len(feedback_entries),
                 )
                 return LLM_CONFIGS[feedback_override]
 
-        # Gather all usable candidates and score them
-        candidates: list[tuple[str, float]] = []
-        for name in LLM_CONFIGS:
-            if not self._is_usable(name):
-                continue
-            score = self._compute_score(task.type, name)
-            # Load balancing penalty: slightly penalize heavily-used LLMs
-            usage = self._session_usage.get(name, 0)
-            load_penalty = usage * 0.02
-            adjusted = score - load_penalty
-            candidates.append((name, adjusted))
-
-        if not candidates:
+        # Sprint 4: usa chain canonica (primary primeiro), igual ao runtime.
+        chain = self.get_fallback_chain(task)
+        if not chain:
             raise RuntimeError(
                 f"No LLM available for task '{task.id}' (type: {task.type})."
             )
 
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        chosen = candidates[0][0]
-        self.record_assignment(chosen)
+        chosen = chain[0]
         logger.info(
-            "SMART[complex] task '%s' (%s) -> %s (score=%.3f, candidates=%d)",
-            task.id, task.type, chosen, candidates[0][1], len(candidates),
+            "SMART[complex] task '%s' (%s) -> %s (canonico chain[0])",
+            task.id, task.type, chosen,
         )
         return LLM_CONFIGS[chosen]
 

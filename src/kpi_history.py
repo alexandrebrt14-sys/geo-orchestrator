@@ -93,6 +93,44 @@ def compute_cost_estimate_accuracy(real_cost: float, estimated_cost: float) -> f
     return round(real_cost / estimated_cost, 4)
 
 
+def compute_tier_internal_engagement_rate(llm_usage: dict[str, int]) -> tuple[float, dict]:
+    """Sprint 4 (2026-04-07): % de tarefas Claude que foram para Sonnet/Haiku.
+
+    Mede adocao do tier interno em runtime. Score:
+    = (claude_sonnet + claude_haiku) / (claude + claude_sonnet + claude_haiku)
+
+    Range: 0.0 (so usa Opus) a 1.0 (so usa Sonnet/Haiku).
+    Alvo: > 0.4 indica que o decomposer esta marcando complexity variavel
+    e o downgrade automatico esta operando.
+    """
+    opus = llm_usage.get("claude", 0)
+    sonnet = llm_usage.get("claude_sonnet", 0)
+    haiku = llm_usage.get("claude_haiku", 0)
+    total = opus + sonnet + haiku
+    if total == 0:
+        return 0.0, {"opus": 0, "sonnet": 0, "haiku": 0, "claude_total": 0}
+    rate = (sonnet + haiku) / total
+    return round(rate, 4), {
+        "opus": opus,
+        "sonnet": sonnet,
+        "haiku": haiku,
+        "claude_total": total,
+    }
+
+
+def compute_fallback_save_rate(fallback_saves: int, total_runs: int) -> float:
+    """Sprint 4 (2026-04-07): % de runs onde a fallback chain salvou >= 1 task.
+
+    Score acumulativo via .kpi_history.jsonl. Mede a importancia da
+    fallback chain estruturada — quanto maior, mais o sistema esta
+    sendo salvo de falhas reais (Gemini 503, Claude timeout, etc.)
+    e nao precisa de intervencao humana.
+    """
+    if total_runs == 0:
+        return 0.0
+    return round(fallback_saves / total_runs, 4)
+
+
 def append_kpi_entry(
     *,
     demand: str,
@@ -102,38 +140,53 @@ def append_kpi_entry(
     llm_usage: dict[str, int],
     tasks_completed: int,
     tasks_failed: int,
+    fallback_saves: int = 0,
     history_path: Path | None = None,
 ) -> dict:
     """Acrescenta uma entrada ao .kpi_history.jsonl e retorna o registro escrito.
 
     Cria o arquivo se nao existir. JSONL append-only.
+
+    Sprint 4 (2026-04-07): adiciona tier_internal_engagement_rate e
+    fallback_chain_save_rate (acumulativo). Mantem retro compatibilidade
+    com entries antigas (campos novos defaultam para 0/None se ausentes).
     """
     path = history_path or KPI_HISTORY_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
 
     health, health_meta = compute_distribution_health(llm_usage)
     accuracy = compute_cost_estimate_accuracy(real_cost, estimated_cost)
+    tier_rate, tier_meta = compute_tier_internal_engagement_rate(llm_usage)
+
+    # Acumulado: le entries anteriores e soma fallback_saves
+    prior = load_recent_entries(n=1000, history_path=path)
+    total_runs_so_far = len(prior) + 1  # incluindo este
+    cumulative_saves = sum(e.get("fallback_saves", 0) for e in prior) + fallback_saves
+    save_rate = compute_fallback_save_rate(cumulative_saves, total_runs_so_far)
 
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "demand": demand[:200],
         "distribution_health": health,
         "cost_estimate_accuracy": accuracy,
+        "tier_internal_engagement_rate": tier_rate,
+        "fallback_saves": fallback_saves,
+        "fallback_chain_save_rate_cumulative": save_rate,
         "real_cost_usd": round(real_cost, 4),
         "estimated_cost_usd": round(estimated_cost, 4),
         "duration_ms": duration_ms,
         "tasks_completed": tasks_completed,
         "tasks_failed": tasks_failed,
         "llm_usage": dict(llm_usage),
-        "_meta": health_meta,
+        "_meta": {**health_meta, **tier_meta},
     }
 
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     logger.info(
-        "KPI HISTORY: distribution_health=%.4f cost_estimate_accuracy=%.2fx (banda saudavel: %.1f-%.1fx)",
-        health, accuracy, ACCURACY_BAND_LOW, ACCURACY_BAND_HIGH,
+        "KPI HISTORY: health=%.4f accuracy=%.2fx tier_engagement=%.0f%% fallback_saves=%d (cumulative_rate=%.0f%%)",
+        health, accuracy, tier_rate * 100, fallback_saves, save_rate * 100,
     )
     return entry
 

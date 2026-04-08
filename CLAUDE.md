@@ -9,6 +9,31 @@ checkpoints, quality gates e governanca FinOps.
 
 **Estado atual**: v2.0 | ~12.500 linhas de Python | 42 arquivos | 33 commits | 116+ execuções
 
+## 2026-04-07 — Sprint 4 (recalibracao de custo + 2 KPIs novos + 7 fixes)
+
+A sprint 4 atacou o drift PARA BAIXO detectado na sprint 3 — pre_check estimava
+com Opus enquanto runtime ja desviava para Sonnet/Haiku via tier interno.
+Run #6: cost_estimate_accuracy subiu de 0.24x para **0.43x** (trajetoria de
+retorno para a banda saudavel 0.7-1.5x). 97/97 tests verde (era 75/75).
+
+| Fix | Status |
+|---|---|
+| #19 (P0) AVG_COST_PER_CALL recalibrado + smart_route aplica downgrade | RESOLVIDO + 7 tests |
+| #21 (P1) decompose() usa claude_sonnet em vez de Opus (-80%/call) | RESOLVIDO + 2 tests |
+| #23 (P1) DECOMPOSE_SYSTEM com regra reforcada de sub-decomposicao review | RESOLVIDO + 2 tests |
+| #24 (P1) KPI tier_internal_engagement_rate persistido | RESOLVIDO + 5 tests |
+| #25 (P1) KPI fallback_chain_save_rate persistido | RESOLVIDO + 3 tests |
+| #26 (P2) cli.py dashboard --export csv\|json | RESOLVIDO + 2 tests |
+| Bonus: dashboard com 2 colunas novas (Tier% e Save%) | RESOLVIDO |
+
+**Marcos da sprint 4**:
+- Pre_check FinOps + runtime agora consistentes (smart_route._route_complex
+  usa chain[0] canonico em vez de _compute_score)
+- decompose() do Orchestrator gasta ~80% menos por chamada (Sonnet vs Opus)
+- 2 KPIs novos no jsonl: tier_internal_engagement_rate (50% no run #6),
+  fallback_chain_save_rate_cumulative (acumulativo, 0% nos 4 runs sem falhas reais)
+- Dashboard CLI ganhou colunas Tier% e Save% + flag --export para Looker/Metabase
+
 ## 2026-04-07 — Sprint 3 (8 fixes + tier interno em runtime + KPI history)
 
 A sprint 3 fechou os 5 itens P0/P1/P2 do backlog publico + 3 bonus durante validacao.

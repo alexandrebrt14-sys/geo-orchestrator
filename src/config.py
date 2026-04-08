@@ -256,19 +256,29 @@ CACHE_TTL_SECONDS: int = int(os.environ.get("GEO_CACHE_TTL", str(24 * 3600)))
 # Context summarization threshold (chars)
 CONTEXT_SUMMARIZE_THRESHOLD: int = 2000
 
-# Average cost estimate per LLM call (used for pre-execution budget check)
-# Recalibrado 2026-04-07 baseado na bateria de testes (test_battery_20260407):
-# - Claude Opus 4.6 real: ~$0.13/call (vs $0.04 antigo era do Opus 3 — 3.3x off)
-# - Gemini 2.5 Pro real: ~$0.005 (vs $0.001 antigo era do 1.5 Flash)
-# - GPT-4o real: ~$0.015 (mantido)
-# - Perplexity sonar-pro real: ~$0.008
-# - Groq Llama 3.3 70B real: ~$0.001 (estimativa mantida)
+# Average cost estimate per LLM call (used for pre-execution budget check).
+# Sprint 4 (2026-04-07) — recalibrado para incluir tier interno Claude.
+# Sprint 3 baixou tanto o custo real (downgrade Opus->Sonnet/Haiku) que o
+# cost_estimate_accuracy ficou em 0.13-0.24x, fora da banda saudavel
+# 0.7-1.5x. Adicionando entradas de Sonnet/Haiku alem de fazer smart_router
+# aplicar downgrade no pre_check, a estimativa volta para a banda.
+#
+# Valores baseados em medias reais dos runs #2-#5 (com tier interno):
+# - claude (Opus 4.6): ~$0.10/call em tarefas high (descricoes longas)
+# - claude_sonnet 4.6: ~$0.025/call (tarefas medium, ~5x mais barato)
+# - claude_haiku 4.5: ~$0.005/call (tarefas low, ~19x mais barato)
+# - gpt4o: ~$0.015/call (mantido)
+# - gemini 2.5 Pro: ~$0.005/call (mantido)
+# - perplexity sonar-pro: ~$0.008/call (mantido)
+# - groq llama 3.3 70B: ~$0.001/call (mantido)
 AVG_COST_PER_CALL: dict[str, float] = {
-    "claude":     0.13,
-    "gpt4o":      0.015,
-    "gemini":     0.005,
-    "perplexity": 0.008,
-    "groq":       0.001,
+    "claude":        0.10,
+    "claude_sonnet": 0.025,
+    "claude_haiku":  0.005,
+    "gpt4o":         0.015,
+    "gemini":        0.005,
+    "perplexity":    0.008,
+    "groq":          0.001,
 }
 
 
