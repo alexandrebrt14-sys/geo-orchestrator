@@ -1,6 +1,35 @@
 # CLAUDE.md — geo-orchestrator
 
-## 2026-04-09 — Mudanças da auditoria de ecossistema
+## 2026-04-09 — Mudanças da auditoria de ecossistema (Wave D)
+
+### NOVO: Versionamento de prompts (B-009)
+- **Commit:** intermediário do batch — `src/prompt_registry.py` + `src/templates/pipeline_system_base.txt`
+- **Como funciona:** `PIPELINE_SYSTEM_BASE` agora carregado de `src/templates/pipeline_system_base.txt` via `Path.read_bytes().decode("utf-8")` para preservar byte-identity entre Windows/Linux/Mac. SHA256 calculado uma vez no module init e congelado. **Anthropic prompt cache (90% desconto) preservado** — verificado por SHA256 idêntico ao literal antigo: `a6a266c8386009a21af4df23d67145471167551d25829df75a51db6fadc16b04`.
+- **Como editar o prompt:** edite `src/templates/pipeline_system_base.txt`, próximo `execution_*.json` terá novo SHA (esperado). Para auditar: `from src.prompt_registry import PIPELINE_SYSTEM_BASE_SHA256`.
+- **ExecutionReport** agora inclui `prompt_metadata: dict` com SHA256 — auditoria ex-post de "qual prompt gerou esta resposta" agora é trivial.
+
+### NOVO: Bearer token opcional no /health (F40)
+- **Commit:** `9488308` — `sec(health): bearer token opcional via GEO_HEALTH_TOKEN`
+- **Comportamento:** sem `GEO_HEALTH_TOKEN` env var → endpoint público (compat backward). Com env var → exige `Authorization: Bearer <token>` com `hmac.compare_digest`. `/` (root docs) sempre público.
+- **Para ATIVAR auth:** `export GEO_HEALTH_TOKEN=$(openssl rand -hex 32)` antes de `cli.py serve`.
+- **Tests:** 7 novos em `TestHealthAuthF40` (401 missing, 401 wrong, 200 correct, root docs public, RFC 7235 WWW-Authenticate, etc.)
+
+### NOVO: Teste E2E real fallback chain (B-010)
+- **Commit:** `86173e7` (junto com F23)
+- **Cobertura:** `TestFallbackChainE2E` em `tests/test_e2e.py` com 4 cenários:
+  - 1 provider falha → segundo assume
+  - 2 providers falham → terceiro assume
+  - Todos falham → graceful degradation sem crash
+  - KPI `fallback_chain_save_rate_cumulative` incrementa
+- **Antes** desta cobertura, F09 era CRÍTICO. Agora documentado e regression-protected.
+
+### NOVO: FinOps SQLite WAL atomic increment (F23)
+- **Commit:** `86173e7`
+- **Antes:** `_daily_spend.json` sofria de TOCTOU race entre processos paralelos (cron + run manual). Perda observada em logs.
+- **Depois:** SQLite WAL com `INSERT ... ON CONFLICT(date, provider) DO UPDATE SET amount = amount + excluded.amount`. JSON continua sendo escrito como snapshot (compat backward).
+- **Migration one-shot:** primeira leitura após esta refatoração importa dados existentes do JSON para SQLite automaticamente.
+- **Fail-degraded:** se SQLite quebrar, volta para in-memory + JSON antigo (compat).
+- **Tests:** 12 novos em `tests/test_finops_sqlite.py` incluindo `concurrent_increments_no_loss` (simula 2 processos), `persists_across_instances` (simula restart).
 
 ### 1. Pre-commit secret_guard (F44)
 - **Commit:** `7f7e74c` — `sec(precommit): instala secret_guard`
