@@ -1,5 +1,25 @@
 # CLAUDE.md — geo-orchestrator
 
+## 2026-04-09 — Wave F (Onda 3 versão solo)
+
+### B-019: SDK público `geo_orchestrator_sdk`
+- **Commit:** `15348ff` — `feat(sdk): geo_orchestrator_sdk shim com API publica estavel`
+- **Arquivo:** `geo_orchestrator_sdk/__init__.py` (NOVO)
+- **API pública estável:** `Orchestrator`, `run`, `run_async`, `ExecutionReport`, `BudgetExceededError`, `get_finops_status`, `get_health_status`, `get_prompt_metadata`, `__version__ = '0.1.0'`
+- **Versionamento independente** de `src/` interno via SemVer
+- **Como consumers usam:**
+  ```python
+  import sys
+  sys.path.insert(0, '/path/to/geo-orchestrator')
+  from geo_orchestrator_sdk import run
+  report = run('Pesquisar GEO no Brasil')
+  ```
+- **14 testes** garantindo a estabilidade da API surface (sentinela contra leak de internos via `__all__`)
+
+### B-025: security-scan workflow
+- **Commit:** posterior — `.github/workflows/security-scan.yml`
+- bandit + pip-audit + gitleaks rodando semanalmente + em PRs
+
 ## 2026-04-09 — Mudanças da auditoria de ecossistema (Wave D)
 
 ### NOVO: Versionamento de prompts (B-009)
