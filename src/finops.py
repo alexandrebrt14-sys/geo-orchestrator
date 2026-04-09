@@ -5,14 +5,26 @@ per-provider daily limit enforcement with fallback routing, cost-per-task
 recording, session reports, and threshold-based alerts.
 
 Persistence:
-  output/.finops/daily_spend.json  — cumulative spend per provider per day
-  output/.finops/task_costs.json   — cost record per task per session
+  output/.finops/daily_spend.sqlite — TRUTH (SQLite WAL, atomic increment)
+  output/.finops/daily_spend.json   — snapshot/audit (compat backward)
+  output/.finops/task_costs.json    — cost record per task per session
+
+Achado F23 da auditoria 2026-04-08: antes da migracao para SQLite WAL,
+o load/save do JSON sofria de TOCTOU race condition. Dois processos
+paralelos liam o mesmo valor, ambos somavam, ambos escreviam — perda
+de tracking de 1+ chamadas. Em producao com cron diario + run manual,
+isso ja foi observado em logs.
+
+A migracao mantem o JSON como SNAPSHOT (escrito apos cada update do
+SQLite) para compat com scripts externos que liam o JSON. Truth eh
+SQLite com UPDATE atomico WHERE date = ? AND provider = ?.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,7 +51,123 @@ _BLOCK_THRESHOLD = 0.95
 # ---------------------------------------------------------------------------
 _FINOPS_DIR: Path = OUTPUT_DIR / ".finops"
 _DAILY_SPEND_PATH: Path = _FINOPS_DIR / "daily_spend.json"
+_DAILY_SPEND_SQLITE: Path = _FINOPS_DIR / "daily_spend.sqlite"
 _TASK_COSTS_PATH: Path = _FINOPS_DIR / "task_costs.json"
+
+
+# ---------------------------------------------------------------------------
+# SQLite helpers — F23 (2026-04-09): substitui o JSON como source of truth
+# para eliminar TOCTOU race entre processos paralelos. JSON continua sendo
+# escrito como snapshot (compat backward com scripts externos).
+# ---------------------------------------------------------------------------
+
+_SCHEMA_DAILY_SPEND = """
+CREATE TABLE IF NOT EXISTS daily_spend (
+    date TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    amount REAL NOT NULL DEFAULT 0.0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (date, provider)
+);
+"""
+
+
+def _finops_sqlite_conn(db_path: Path = None) -> sqlite3.Connection:
+    """Conexao SQLite com WAL + schema garantido."""
+    path = db_path or _DAILY_SPEND_SQLITE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute(_SCHEMA_DAILY_SPEND)
+    conn.commit()
+    return conn
+
+
+def _atomic_increment_spend(provider: str, amount: float, date: str) -> float:
+    """Incrementa atomicamente o spend de um provider. Retorna o novo total.
+
+    Usa UPSERT atomico (INSERT ... ON CONFLICT) — sem race condition.
+    Multi-processo seguro via SQLite WAL + busy_timeout.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with _finops_sqlite_conn() as conn:
+        conn.execute(
+            """INSERT INTO daily_spend (date, provider, amount, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(date, provider) DO UPDATE SET
+                   amount = amount + excluded.amount,
+                   updated_at = excluded.updated_at""",
+            (date, provider, amount, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT amount FROM daily_spend WHERE date = ? AND provider = ?",
+            (date, provider),
+        ).fetchone()
+        return float(row["amount"]) if row else amount
+
+
+def _load_spend_for_date(date: str) -> dict[str, float]:
+    """Le todos os spends do dia. Source of truth = SQLite."""
+    try:
+        with _finops_sqlite_conn() as conn:
+            rows = conn.execute(
+                "SELECT provider, amount FROM daily_spend WHERE date = ?",
+                (date,),
+            ).fetchall()
+            return {r["provider"]: float(r["amount"]) for r in rows}
+    except sqlite3.Error as exc:
+        logger.warning("FinOps SQLite read falhou: %s — usando JSON fallback", exc)
+        return {}
+
+
+def _migrate_json_to_sqlite_if_needed(date: str, json_path: Path) -> dict[str, float]:
+    """Migracao one-shot: se SQLite vazio para o dia E JSON tem dados, importa.
+
+    Roda apenas na primeira execucao apos a refatoracao F23. Depois, SQLite
+    eh autoritativo e o JSON eh apenas snapshot.
+    """
+    sqlite_data = _load_spend_for_date(date)
+    if sqlite_data:
+        return sqlite_data  # ja migrado
+
+    if not json_path.exists():
+        return {}
+
+    try:
+        json_data = json.loads(json_path.read_text(encoding="utf-8"))
+        if json_data.get("date") != date:
+            return {}  # JSON eh de outro dia, nao migra
+        legacy_spend = json_data.get("spend", {})
+        if not legacy_spend:
+            return {}
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("FinOps migration: falha lendo %s: %s", json_path, exc)
+        return {}
+
+    logger.info(
+        "FinOps F23 migration: importando %d providers de daily_spend.json para SQLite",
+        len(legacy_spend),
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    with _finops_sqlite_conn() as conn:
+        for provider, amount in legacy_spend.items():
+            if amount <= 0:
+                continue
+            conn.execute(
+                """INSERT INTO daily_spend (date, provider, amount, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(date, provider) DO UPDATE SET
+                       amount = excluded.amount,
+                       updated_at = excluded.updated_at""",
+                (date, provider, float(amount), now),
+            )
+        conn.commit()
+
+    return _load_spend_for_date(date)
 
 # ---------------------------------------------------------------------------
 # Provider name mapping (LLM name -> provider key used in FINOPS_DAILY_LIMITS)
@@ -81,30 +209,27 @@ class FinOps:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def _load_daily_spend(self) -> None:
-        """Load daily spend from disk. Reset if the date has changed."""
+        """Load daily spend from SQLite (source of truth). Reset on new day.
+
+        F23 (2026-04-09): SQLite WAL substitui JSON como source of truth
+        para eliminar TOCTOU race condition. Migration one-shot importa
+        dados existentes do JSON na primeira execucao. JSON continua sendo
+        escrito como snapshot (compat backward).
+        """
         today = self._current_date_key()
         self._today = today
 
-        if _DAILY_SPEND_PATH.exists():
-            try:
-                data = json.loads(_DAILY_SPEND_PATH.read_text(encoding="utf-8"))
-                if data.get("date") == today:
-                    self._daily_spend = data.get("spend", {})
-                    logger.info(
-                        "FinOps: carregou gastos do dia %s — %s",
-                        today,
-                        {k: f"${v:.4f}" for k, v in self._daily_spend.items()},
-                    )
-                    return
-                else:
-                    logger.info(
-                        "FinOps: dados de %s encontrados, mas hoje eh %s — resetando.",
-                        data.get("date"), today,
-                    )
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.warning("FinOps: falha ao ler daily_spend.json: %s", exc)
+        # Migration one-shot: importa JSON existente para SQLite (so primeira vez)
+        loaded = _migrate_json_to_sqlite_if_needed(today, _DAILY_SPEND_PATH)
+        if loaded:
+            self._daily_spend = loaded
+            logger.info(
+                "FinOps F23: carregou %d providers do SQLite para %s",
+                len(loaded), today,
+            )
+            return
 
-        # Initialize fresh spend counters
+        # Sem dados do dia: inicializa contadores zerados
         self._daily_spend = {
             "anthropic": 0.0,
             "openai": 0.0,
@@ -278,8 +403,17 @@ class FinOps:
         """
         provider = self._resolve_provider(provider_or_llm)
 
-        # Update daily spend
-        self._daily_spend[provider] = self._daily_spend.get(provider, 0.0) + cost
+        # F23: increment ATOMICO no SQLite (sem TOCTOU race entre processos).
+        # O dict in-memory eh atualizado a partir do retorno autoritativo.
+        try:
+            new_total = _atomic_increment_spend(provider, cost, self._today)
+            self._daily_spend[provider] = new_total
+        except sqlite3.Error as exc:
+            # Fail-degraded: incrementa apenas em memoria + JSON (compat antigo)
+            logger.warning("FinOps SQLite write falhou: %s — usando JSON-only", exc)
+            self._daily_spend[provider] = self._daily_spend.get(provider, 0.0) + cost
+
+        # Snapshot JSON (compat backward para scripts externos que liam o JSON)
         self._save_daily_spend()
 
         # Record task cost
