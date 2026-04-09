@@ -85,7 +85,7 @@ class BaseAgent(ABC):
         llm_client: Cliente HTTP configurado para a API do LLM alvo.
         task_type: Tipo de tarefa que este agente processa.
         system_prompt: Prompt de sistema do agente.
-        model_name: Identificador do modelo (ex: "gpt-4o", "claude-opus-4-20250514").
+        model_name: Identificador do modelo (ex: "gpt-4o", "claude-opus-4-6").
         cost_per_1k_input: Custo por 1K tokens de entrada (USD).
         cost_per_1k_output: Custo por 1K tokens de saída (USD).
     """
