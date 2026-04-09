@@ -1,5 +1,28 @@
 # CLAUDE.md — geo-orchestrator
 
+## 2026-04-09 — Mudanças da auditoria de ecossistema
+
+### 1. Pre-commit secret_guard (F44)
+- **Commit:** `7f7e74c` — `sec(precommit): instala secret_guard`
+- **Arquivos:** `.tools/secret_guard.py`, `.githooks/pre-commit`
+- **Já ativado** localmente. Bloqueia commits de `.env` e padrões de segredo conhecidos.
+
+### Achados deste repo da auditoria — status
+
+Todos os achados deste repo foram **revisados e parcialmente downgraded** após verificação direta + crosscheck multi-LLM:
+
+- **F08 (prompts hardcoded) — DOWNGRADE:** O hardcoding de `PIPELINE_SYSTEM_BASE` em `src/pipeline.py:42-165` é **intencional** desde Sprint 8 para ativar `cache_control: ephemeral` da Anthropic (90% desconto em input tokens cacheados). O comentário do código (linhas 42-62) explica. Severidade revisada: CRÍTICO → MÉDIO. Linhas reais ~102 (não 263 como reportado).
+- **F09 (fallback chain sem teste E2E) — DOWNGRADE:** Run #7 do CLAUDE.md mostra fallback funcionando em produção quando Anthropic estava em 102% do budget. Crosscheck desta sessão confirmou (claude_opus 1/0 → claude_sonnet 1/1 → claude_haiku 1/1 sem falha). Falta apenas teste automatizado para regressão. Severidade: CRÍTICO → MÉDIO.
+- **F10 (cap 80% pre-check vs runtime divergem):** mantido CRÍTICO, Onda 2.
+- **F23 (`_daily_spend.json` sem lock TOCTOU):** mantido ALTO, Onda 2.
+- **F24 (requirements unpinned, sem Dependabot):** mantido ALTO, Onda 2.
+
+### Próximos passos planejados (Onda 2)
+
+- **B-009:** versionar prompts em `templates/system_prompts.yaml` + SHA256 anexado em `execution_*.json`. Importante: a constante deve ser carregada UMA vez no init e congelada para preservar Anthropic prompt cache (qualquer mudança de byte invalida o cache).
+- **B-010:** teste E2E real de fallback chain — mockar 2 providers caindo em sequência e verificar que terceiro provider executou
+- **B-019 (Onda 3):** publicar como `geo-orchestrator-sdk` Python para consumers (papers, curso-factory, caramaschi) parar de chamar LLMs direto
+
 ## Proposito
 
 Orquestrador multi-LLM da Brasil GEO. Recebe uma demanda em linguagem natural,
