@@ -214,6 +214,46 @@ def _build_metrics_payload(n: int = 20) -> dict:
     }
 
 
+def _check_auth(request_headers, path: str) -> tuple[bool, str]:
+    """Valida bearer token opcional contra GEO_HEALTH_TOKEN env var.
+
+    Achado F40 da auditoria 2026-04-08: antes deste guard, /health expunha
+    metricas FinOps, KPIs, ultimos custos e estado de calibracao SEM
+    autenticacao. Como o servidor pode rodar em 0.0.0.0 (lb/k8s) e nao
+    so localhost, isso vazava informacao sensivel.
+
+    Comportamento:
+    - Se GEO_HEALTH_TOKEN nao estiver setado: endpoint publico (compat
+      backward com setups existentes que dependem de polling sem auth)
+    - Se setado: requer header `Authorization: Bearer <token>` com
+      comparacao timing-safe via hmac.compare_digest
+
+    Endpoint `/` (root docs) eh sempre publico — apenas mostra os paths
+    disponiveis, sem dado sensivel.
+
+    Returns:
+        Tupla (autorizado, motivo). Motivo eh string vazia quando ok.
+    """
+    import hmac
+    import os
+
+    expected = os.environ.get("GEO_HEALTH_TOKEN", "").strip()
+    if not expected:
+        return True, ""  # auth desabilitada (compat)
+    if path in ("", "/"):
+        return True, ""  # docs publicas
+
+    auth_header = request_headers.get("Authorization", "")
+    if not auth_header:
+        return False, "missing Authorization header"
+    if not auth_header.startswith("Bearer "):
+        return False, "Authorization must be Bearer <token>"
+    received = auth_header[len("Bearer "):].strip()
+    if not hmac.compare_digest(received, expected):
+        return False, "invalid token"
+    return True, ""
+
+
 class HealthHandler(BaseHTTPRequestHandler):
     """Handler stdlib que responde /health, /metrics, /."""
 
@@ -231,6 +271,22 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0].rstrip("/")
+
+        # Auth bearer opcional (achado F40)
+        ok, reason = _check_auth(self.headers, path)
+        if not ok:
+            self.send_response(401)
+            self.send_header(
+                "WWW-Authenticate",
+                'Bearer realm="geo-orchestrator-health"',
+            )
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(
+                json.dumps({"error": "unauthorized", "detail": reason}).encode("utf-8")
+            )
+            return
+
         if path in ("", "/"):
             self._send_json(200, {
                 "service": "geo-orchestrator",
@@ -238,6 +294,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                     "/health": "health checks (200 OK/ATENCAO, 503 CRITICO)",
                     "/metrics": "KPI timeseries (last 20 runs)",
                 },
+                "auth": "bearer optional via GEO_HEALTH_TOKEN env var",
             })
             return
         if path == "/health":

@@ -219,6 +219,7 @@ class TestHealthHandlerExtras:
         from src.health_server import HealthHandler
         handler = HealthHandler.__new__(HealthHandler)
         handler.path = "/nonexistent"
+        handler.headers = {}
         captured = []
         handler.send_response = lambda s: captured.append(s)
         handler.send_header = lambda *a: None
@@ -231,3 +232,91 @@ class TestHealthHandlerExtras:
         handler.address_string = lambda: "test"
         handler.do_GET()
         assert captured[0] == 404
+
+
+# ─── F40: Bearer token opcional no /health ─────────────────────────────────
+
+
+class TestHealthAuthF40:
+    """Achado F40 da auditoria 2026-04-08: /health expunha metricas FinOps,
+    KPIs, custos e calibracao sem auth. Bearer token opcional via env var
+    GEO_HEALTH_TOKEN. Sem token = endpoint publico (compat backward)."""
+
+    def _make_handler(self, path, headers=None):
+        from src.health_server import HealthHandler
+        h = HealthHandler.__new__(HealthHandler)
+        h.path = path
+        h.headers = headers or {}
+        h._captured = []
+        h.send_response = lambda s: h._captured.append(("status", s))
+        h.send_header = lambda n, v: h._captured.append(("header", n, v))
+        h.end_headers = lambda: h._captured.append(("end_headers",))
+        class FakeWFile:
+            def __init__(self):
+                self.data = b""
+            def write(self, b):
+                self.data += b
+        h.wfile = FakeWFile()
+        h.address_string = lambda: "test"
+        return h
+
+    def test_no_token_set_acts_as_public(self, monkeypatch):
+        """Sem GEO_HEALTH_TOKEN -> qualquer requisicao passa (compat)."""
+        monkeypatch.delenv("GEO_HEALTH_TOKEN", raising=False)
+        h = self._make_handler("/health")
+        h.do_GET()
+        statuses = [c[1] for c in h._captured if c[0] == "status"]
+        assert statuses[0] in (200, 503)  # nao 401
+
+    def test_token_set_blocks_missing_header(self, monkeypatch):
+        """Com token + sem header Authorization -> 401."""
+        monkeypatch.setenv("GEO_HEALTH_TOKEN", "secret-test-token-xyz")
+        h = self._make_handler("/health", headers={})
+        h.do_GET()
+        statuses = [c[1] for c in h._captured if c[0] == "status"]
+        assert statuses[0] == 401
+
+    def test_token_set_blocks_wrong_token(self, monkeypatch):
+        """Com token + Bearer errado -> 401."""
+        monkeypatch.setenv("GEO_HEALTH_TOKEN", "secret-test-token-xyz")
+        h = self._make_handler("/health", headers={"Authorization": "Bearer wrong-token"})
+        h.do_GET()
+        statuses = [c[1] for c in h._captured if c[0] == "status"]
+        assert statuses[0] == 401
+
+    def test_token_set_accepts_correct_token(self, monkeypatch):
+        """Com token + Bearer correto -> 200/503 (passa para handler)."""
+        monkeypatch.setenv("GEO_HEALTH_TOKEN", "secret-test-token-xyz")
+        h = self._make_handler(
+            "/health",
+            headers={"Authorization": "Bearer secret-test-token-xyz"},
+        )
+        h.do_GET()
+        statuses = [c[1] for c in h._captured if c[0] == "status"]
+        assert statuses[0] in (200, 503)  # passou auth
+
+    def test_root_docs_always_public_even_with_token(self, monkeypatch):
+        """/ (root docs) sempre publica, mesmo com token configurado.
+        Permite descoberta de endpoints sem expor dados sensiveis."""
+        monkeypatch.setenv("GEO_HEALTH_TOKEN", "secret-test-token-xyz")
+        h = self._make_handler("/", headers={})
+        h.do_GET()
+        statuses = [c[1] for c in h._captured if c[0] == "status"]
+        assert statuses[0] == 200
+
+    def test_check_auth_uses_compare_digest(self):
+        """Static guard: _check_auth deve usar hmac.compare_digest (timing-safe)."""
+        import inspect
+        from src.health_server import _check_auth
+        source = inspect.getsource(_check_auth)
+        assert "hmac.compare_digest" in source, (
+            "_check_auth DEVE usar hmac.compare_digest contra timing attack"
+        )
+
+    def test_unauthorized_response_includes_www_authenticate(self, monkeypatch):
+        """RFC 7235: 401 deve incluir WWW-Authenticate header."""
+        monkeypatch.setenv("GEO_HEALTH_TOKEN", "secret-test-token-xyz")
+        h = self._make_handler("/health", headers={})
+        h.do_GET()
+        headers_sent = [(c[1], c[2]) for c in h._captured if c[0] == "header"]
+        assert any("WWW-Authenticate" in n for n, _ in headers_sent)
