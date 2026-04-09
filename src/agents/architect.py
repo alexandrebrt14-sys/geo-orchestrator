@@ -70,7 +70,7 @@ class ArchitectAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Any,
-        model_name: str = "claude-opus-4-20250514",
+        model_name: str = "claude-opus-4-6",
         cost_per_1k_input: float = 0.015,
         cost_per_1k_output: float = 0.075,
     ):
@@ -94,6 +94,9 @@ class ArchitectAgent(BaseAgent):
             else:
                 anthropic_messages.append(msg)
 
+        # Prompt caching: ARCHITECT_SYSTEM_PROMPT tem ~1900 chars (curto demais
+        # para cache valer ~1024 tokens). Mantemos como string. Se o prompt
+        # crescer no futuro, basta envolver em [{type:text, text, cache_control}].
         response = await self.llm_client.post(
             "https://api.anthropic.com/v1/messages",
             json={

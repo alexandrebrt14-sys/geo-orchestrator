@@ -228,6 +228,13 @@ class LLMClient:
     # Anthropic (Claude)
     # ------------------------------------------------------------------
 
+    # Limiar minimo de chars do system prompt para ativar prompt caching.
+    # Anthropic exige >=1024 tokens cacheaveis (Sonnet/Opus) — em chars,
+    # 4000 e uma estimativa conservadora (4 chars/token). Abaixo disso,
+    # o cache nem e criado pelo backend, e o overhead de billing do create
+    # nao compensa.
+    _CACHE_MIN_CHARS = 4000
+
     async def _call_anthropic(
         self, prompt: str, system: str, max_tokens: int
     ) -> LLMResponse:
@@ -243,7 +250,20 @@ class LLMClient:
             "messages": [{"role": "user", "content": prompt}],
         }
         if system:
-            body["system"] = system
+            # Prompt caching: para system prompts grandes, marca cache_control
+            # ephemeral. Hits subsequentes (mesmo system, ate 5 min) cobram
+            # 0.10x do preco normal de input tokens — economia de 90% no
+            # bloco cacheado. Create cobra 1.25x apenas na 1a vez.
+            if len(system) >= self._CACHE_MIN_CHARS:
+                body["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                body["system"] = system
 
         pool = ConnectionPool.get_instance()
         client = await pool.get_client(Provider.ANTHROPIC, timeout=self._timeout)
@@ -255,14 +275,31 @@ class LLMClient:
         usage = data.get("usage", {})
         tokens_in = usage.get("input_tokens", 0)
         tokens_out = usage.get("output_tokens", 0)
+        # Cache accounting: a Anthropic retorna 2 campos extras quando
+        # caching esta ativo. Esses tokens NAO entram em input_tokens.
+        cache_create = usage.get("cache_creation_input_tokens", 0) or 0
+        cache_read = usage.get("cache_read_input_tokens", 0) or 0
+
+        # Cost: input normal + output normal + (create * 1.25) + (read * 0.10)
+        # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#pricing
+        in_price = self.config.cost_per_1k_input / 1000.0
+        out_price = self.config.cost_per_1k_output / 1000.0
         cost = (
-            tokens_in / 1000 * self.config.cost_per_1k_input
-            + tokens_out / 1000 * self.config.cost_per_1k_output
+            tokens_in * in_price
+            + tokens_out * out_price
+            + cache_create * in_price * 1.25
+            + cache_read * in_price * 0.10
         )
+
+        if cache_create or cache_read:
+            logger.info(
+                "anthropic cache: create=%d read=%d in=%d out=%d cost=$%.5f",
+                cache_create, cache_read, tokens_in, tokens_out, cost,
+            )
 
         return LLMResponse(
             text=text,
-            tokens_input=tokens_in,
+            tokens_input=tokens_in + cache_create + cache_read,
             tokens_output=tokens_out,
             cost=cost,
             model=self.config.model,
