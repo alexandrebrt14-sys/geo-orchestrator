@@ -416,6 +416,13 @@ class Orchestrator:
             pipeline=pipeline if tasks_to_run else None,
         )
 
+        # B-009: anexa SHA256 do prompt usado para auditoria/reprodutibilidade
+        try:
+            from .prompt_registry import get_prompt_metadata
+            _prompt_meta = get_prompt_metadata()
+        except Exception:
+            _prompt_meta = {}
+
         report = ExecutionReport(
             demand=demand,
             plan=plan,
@@ -430,6 +437,7 @@ class Orchestrator:
             estimated_cost=estimated_cost,
             budget_limit=BUDGET_LIMIT,
             summary=summary,
+            prompt_metadata=_prompt_meta,
         )
 
         # v2.0 Enhanced status report

@@ -93,3 +93,8 @@ class ExecutionReport(BaseModel):
     estimated_cost: float = 0.0
     budget_limit: float = 0.0
     summary: str = ""
+    # B-009: rastreabilidade do prompt usado nesta execucao.
+    # SHA256 do PIPELINE_SYSTEM_BASE carregado de templates/. Permite
+    # auditoria ex-post: dado um execution_*.json, recuperar exatamente
+    # qual versao do prompt produziu o output.
+    prompt_metadata: dict = Field(default_factory=dict)
