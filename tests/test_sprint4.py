@@ -86,10 +86,18 @@ class TestSmartRouteDowngrade:
     def test_smart_route_keeps_opus_for_high(self):
         from src.smart_router import DemandTier
         router = self._make_router()
+        # 2026-04-14: Opus so mantido quando task.type ∈ {architecture, review}.
+        task = self._make_task("architecture", "high")
+        cfg = router.smart_route(task, DemandTier.COMPLEX)
+        assert cfg.name == "claude"
+
+    def test_smart_route_downgrades_code_high_to_sonnet(self):
+        # 2026-04-14: code+high agora cai para Sonnet (task_type fora do allowlist).
+        from src.smart_router import DemandTier
+        router = self._make_router()
         task = self._make_task("code", "high")
         cfg = router.smart_route(task, DemandTier.COMPLEX)
-        # High mantem Opus (downgrade nao aplica)
-        assert cfg.name == "claude"
+        assert cfg.name == "claude_sonnet"
 
     def test_smart_route_does_not_affect_non_claude(self):
         from src.smart_router import DemandTier
@@ -100,7 +108,12 @@ class TestSmartRouteDowngrade:
         assert cfg.name == "perplexity"
 
     def test_downgrade_unit_test_independent_of_route(self):
-        """Teste de unidade direto do downgrade — independe de _route_*."""
+        """Teste de unidade direto do downgrade — independe de _route_*.
+
+        2026-04-14: regra nova — Opus so para task.type ∈ OPUS_ALLOWED
+        (architecture, review, critical_review). Para outros task_types,
+        high complexity ja cai para Sonnet.
+        """
         from src.smart_router import SmartRouter
         from src.models import Task, TaskComplexity
         router = SmartRouter()
@@ -110,8 +123,13 @@ class TestSmartRouteDowngrade:
         task_med = Task(id="t", type="code", description="x", complexity=TaskComplexity.MEDIUM)
         assert router.downgrade_claude_by_complexity("claude", task_med) == "claude_sonnet"
 
+        # 2026-04-14: code+high agora cai para Sonnet (task_type fora do allowlist)
         task_high = Task(id="t", type="code", description="x", complexity=TaskComplexity.HIGH)
-        assert router.downgrade_claude_by_complexity("claude", task_high) == "claude"
+        assert router.downgrade_claude_by_complexity("claude", task_high) == "claude_sonnet"
+
+        # Opus e preservado apenas quando task.type esta no allowlist + high complexity
+        task_arch_high = Task(id="t", type="architecture", description="x", complexity=TaskComplexity.HIGH)
+        assert router.downgrade_claude_by_complexity("claude", task_arch_high) == "claude"
 
 
 # ─── Fix #21: Orchestrator.decompose() usa Sonnet ──────────────────────

@@ -229,12 +229,14 @@ class FinOps:
             )
             return
 
-        # Sem dados do dia: inicializa contadores zerados
+        # Sem dados do dia: inicializa contadores zerados.
+        # 2026-04-14: inclui groq (faltava no init antigo).
         self._daily_spend = {
             "anthropic": 0.0,
             "openai": 0.0,
             "google": 0.0,
             "perplexity": 0.0,
+            "groq": 0.0,
         }
 
     def _save_daily_spend(self) -> None:
@@ -601,12 +603,15 @@ class FinOps:
         return status
 
     def reset_daily(self) -> None:
-        """Force-reset all daily spend counters."""
+        """Force-reset all daily spend counters.
+        2026-04-14: inclui groq (faltava antes).
+        """
         self._daily_spend = {
             "anthropic": 0.0,
             "openai": 0.0,
             "google": 0.0,
             "perplexity": 0.0,
+            "groq": 0.0,
         }
         self._today = self._current_date_key()
         self._save_daily_spend()

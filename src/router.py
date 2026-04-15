@@ -36,12 +36,18 @@ _MIN_SAMPLES = 3
 
 # Concentration cap: maximum share (0.0-1.0) of tasks that any single provider
 # can take in a session. Once a provider exceeds this share, the router
-# redirects subsequent tasks to alternatives. Critical for cost balance.
-CONCENTRATION_CAP: float = 0.80
+# redirects subsequent tasks to alternatives.
+# 2026-04-14: 0.80 -> 0.90. Cap 80% era agressivo demais para demandas
+# profundas (ebook/curso de 10+ tasks geralmente tem 6-7 de um provider
+# legitimamente). Cap 90% ainda previne concentracao total (100%) mas
+# deixa o primary fazer seu papel em runs grandes.
+CONCENTRATION_CAP: float = 0.90
 
 # Minimum task count before the cap kicks in (avoids penalizing the very first
 # task which trivially is at 100% of 1 task).
-CAP_MIN_TASKS: int = 3
+# 2026-04-14: 3 -> 5. Cap so faz sentido em runs grandes — em runs pequenos
+# (3-4 tasks) a redistribuicao destrutiva tira o primary sem ganho real.
+CAP_MIN_TASKS: int = 5
 
 
 class Router:
@@ -371,34 +377,86 @@ class Router:
         future_share = (self._session_usage.get(llm_name, 0) + 1) / (total + 1)
         return future_share > CONCENTRATION_CAP
 
+    # Task types onde Opus e justificado (raciocinio complexo nao-delegavel).
+    # Decisao 2026-04-14: Opus so para architecture/critical_review/review;
+    # todo o resto (code, writing, analysis, etc) vai para Sonnet mesmo em
+    # high complexity. Sonnet 4.6 entrega 90%+ da qualidade de Opus por 1/5
+    # do custo — justifica Opus apenas onde cada ponto de qualidade importa.
+    _OPUS_ALLOWED_TASK_TYPES = frozenset({
+        "architecture",
+        "review",
+        "critical_review",
+    })
+
     def downgrade_claude_by_complexity(self, name: str, task: Task) -> str:
-        """Downgrade automatico Claude Opus -> Sonnet/Haiku por complexity.
+        """Downgrade automatico Claude Opus -> Sonnet/Haiku.
 
         Adicionado 2026-04-07 (sprint 2). Mantem familia Claude (qualidade
-        de raciocinio similar) mas usa o tier de custo certo:
+        de raciocinio similar) mas usa o tier de custo certo.
+
+        2026-04-14 — nova regra de task.type (anterior ao check de complexity):
+        Opus so e mantido quando task.type ∈ _OPUS_ALLOWED_TASK_TYPES
+        (architecture, review, critical_review). Para os demais task types
+        (code, writing, analysis, etc), forca Sonnet mesmo em high complexity.
+
+        Apos o filtro de task.type, aplica o tier por complexity:
         - low    -> claude_haiku  (~19x mais barato)
         - medium -> claude_sonnet (~5x mais barato)
-        - high   -> claude (Opus, mantido)
+        - high   -> claude (Opus, mantido, so se task_type permitir)
 
         So aplica downgrade se a alternativa estiver disponivel
-        (api key valida + nao rate-limited). Caso contrario mantem Opus.
+        (api key valida + nao rate-limited). Caso contrario mantem original.
         """
         if name != "claude":
             return name
         complexity = task.complexity.value if hasattr(task.complexity, "value") else str(task.complexity)
+        task_type = getattr(task, "type", "") or ""
+
+        # Regra 1 (task.type): Opus so para architecture/review/critical_review.
+        # Para os demais task types, forca Sonnet independente de complexity.
+        if task_type not in self._OPUS_ALLOWED_TASK_TYPES:
+            if complexity == "low" and self._is_usable("claude_haiku"):
+                logger.info(
+                    "CLAUDE TIER: task '%s' (type=%s, low) Opus -> Haiku (-95%% custo)",
+                    task.id, task_type,
+                )
+                return "claude_haiku"
+            if self._is_usable("claude_sonnet"):
+                logger.info(
+                    "CLAUDE TIER: task '%s' (type=%s) Opus -> Sonnet "
+                    "(task_type fora de OPUS_ALLOWED, -80%% custo)",
+                    task.id, task_type,
+                )
+                return "claude_sonnet"
+            return name  # fallback se Sonnet indisponivel
+
+        # Regra 2 (complexity dentro de OPUS_ALLOWED): downgrade classico.
+        # 2026-04-14: review/critical_review NUNCA cai para Haiku — qualidade
+        # do review e critica para validar outputs de Opus/GPT-4o. Piso = Sonnet.
+        if task_type in ("review", "critical_review"):
+            if complexity in ("low", "medium") and self._is_usable("claude_sonnet"):
+                logger.info(
+                    "CLAUDE TIER: task '%s' (type=%s, %s) Opus -> Sonnet "
+                    "(review nunca cai para Haiku, piso=Sonnet)",
+                    task.id, task_type, complexity,
+                )
+                return "claude_sonnet"
+            return name  # review high -> Opus
+
+        # Regra 3 (architecture): complexity pode cair para Haiku.
         if complexity == "low" and self._is_usable("claude_haiku"):
             logger.info(
-                "CLAUDE TIER: task '%s' (low complexity) Opus -> Haiku (-95%% custo)",
-                task.id,
+                "CLAUDE TIER: task '%s' (type=%s, low) Opus -> Haiku (-95%% custo)",
+                task.id, task_type,
             )
             return "claude_haiku"
         if complexity == "medium" and self._is_usable("claude_sonnet"):
             logger.info(
-                "CLAUDE TIER: task '%s' (medium complexity) Opus -> Sonnet (-80%% custo)",
-                task.id,
+                "CLAUDE TIER: task '%s' (type=%s, medium) Opus -> Sonnet (-80%% custo)",
+                task.id, task_type,
             )
             return "claude_sonnet"
-        return name  # high stays Opus
+        return name  # high + task_type allowed -> Opus
 
     def apply_concentration_cap(
         self, chosen: str, chain: list[str]

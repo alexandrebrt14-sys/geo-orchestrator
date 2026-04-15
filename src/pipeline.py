@@ -711,23 +711,28 @@ class Pipeline:
     #
     # Override sao mantidos para tipos que LEGITIMAMENTE precisam de
     # output longo (writing de artigo, code generation completa).
+    # 2026-04-14: tetos elevados para demandas profundas (ebook, curso,
+    # research academica). Writing/research/architecture podem chegar ao
+    # max real do provider (Gemini suporta 16k). Output denso justifica
+    # tokens — se nao precisar, modelo nao enche, mas o teto nao trava.
     _MAX_TOKENS_BY_TASK_TYPE = {
-        "writing": 8192,           # artigos longos, copy de pagina
-        "copywriting": 8192,
-        "code_generation": 8192,   # arquivos completos
-        "architecture": 4096,      # decisao + diagrama, raramente precisa mais
-        "code": 6144,              # snippets, refactor pontual
-        "review": 4096,
-        "analysis": 4096,
-        "research": 4096,
-        "summarization": 2048,
-        "classification": 1024,
-        "fact_check": 2048,
-        "translation": 4096,
-        "data_processing": 4096,
-        "seo": 4096,
+        "writing": 16384,          # capitulos de ebook, longform 5k+ palavras
+        "copywriting": 16384,
+        "code_generation": 8192,
+        "architecture": 8192,      # decomposicao + diagrama detalhado
+        "code": 8192,
+        "review": 6144,            # review denso com recomendacoes acionaveis
+        "critical_review": 6144,
+        "analysis": 8192,          # analise academica com citacoes
+        "research": 8192,          # deep research com fontes multiplas
+        "summarization": 4096,
+        "classification": 2048,
+        "fact_check": 4096,        # fact-check com contexto e sources
+        "translation": 6144,
+        "data_processing": 6144,
+        "seo": 6144,
     }
-    _DEFAULT_MAX_TOKENS = 4096
+    _DEFAULT_MAX_TOKENS = 6144
 
     @classmethod
     def _max_tokens_for_task(cls, task_type: str, config: "LLMConfig") -> int:

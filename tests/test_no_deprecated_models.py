@@ -118,12 +118,16 @@ def test_pipeline_max_tokens_is_capped():
     from src.config import LLM_CONFIGS
 
     claude = LLM_CONFIGS["claude"]
-    # Architecture deve cair para 4096 (vs 8192 do config)
-    assert Pipeline._max_tokens_for_task("architecture", claude) == 4096
-    # Writing pode manter 8192 (output legitimamente longo)
+    # 2026-04-14: tetos elevados para demandas profundas.
+    # Architecture sobe para 8192 (decomposicao + diagrama detalhado).
+    assert Pipeline._max_tokens_for_task("architecture", claude) == 8192
+    # Writing sobe para 16k mas e capado pelo max do modelo (Claude=8192).
     assert Pipeline._max_tokens_for_task("writing", claude) == 8192
-    # Tipo desconhecido cai para o default 4096
-    assert Pipeline._max_tokens_for_task("inexistente_xyz", claude) == 4096
-    # Cap pelo modelo: se LLMConfig.max_tokens for menor, prevalece
-    perplexity = LLM_CONFIGS["perplexity"]  # max_tokens=4096
-    assert Pipeline._max_tokens_for_task("writing", perplexity) == 4096
+    # Tipo desconhecido cai para o default 6144.
+    assert Pipeline._max_tokens_for_task("inexistente_xyz", claude) == 6144
+    # 2026-04-14: perplexity=8192, tetos elevados para deep work.
+    perplexity = LLM_CONFIGS["perplexity"]
+    # Architecture sobe para 8192 mas e capado pelo max do modelo.
+    assert Pipeline._max_tokens_for_task("architecture", perplexity) == min(8192, perplexity.max_tokens)
+    # Writing: 16384 wanted, capado pelo max do modelo (8192 perplexity).
+    assert Pipeline._max_tokens_for_task("writing", perplexity) == perplexity.max_tokens

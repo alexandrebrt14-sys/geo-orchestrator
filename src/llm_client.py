@@ -29,9 +29,15 @@ class LLMClient:
     Supports per-task timeout overrides and connection pooling.
     """
 
-    TIMEOUT = 60.0
-    MAX_RETRIES = 2
-    BASE_RETRY_DELAY = 2.0  # seconds — exponential: 2s, 4s, 8s
+    # 2026-04-14: timeouts e retries mais generosos para demandas profundas.
+    # TIMEOUT default 60s -> 180s (maior parte dos task types agora usa
+    # per-task override, mas o default importa para path novo sem routing).
+    # MAX_RETRIES 2 -> 3 (sonar-deep-research falhava nos 2 retries porque
+    # cada query pode levar 90-180s + retry com backoff dobrado estouraria
+    # rapido o orcamento de tempo).
+    TIMEOUT = 180.0
+    MAX_RETRIES = 3
+    BASE_RETRY_DELAY = 2.0  # seconds — exponential: 2s, 4s, 8s, 16s
 
     def __init__(self, config: LLMConfig, timeout_override: float | None = None) -> None:
         self.config = config

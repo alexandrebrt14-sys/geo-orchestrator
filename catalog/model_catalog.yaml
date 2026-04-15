@@ -80,14 +80,17 @@ providers:
     display_name: "Perplexity"
     api_key_env: PERPLEXITY_API_KEY
     models:
-      sonar-pro:
-        display: "Sonar Pro"
-        input_cost_per_mtok: 3.00
-        output_cost_per_mtok: 15.00
-        max_tokens: 4096
+      sonar-deep-research:
+        display: "Sonar Deep Research"
+        # 2026-04-14: upgrade sonar-pro -> sonar-deep-research.
+        # Pricing Perplexity: $2/M input + $8/M output + $3/M reasoning + $5 per 1000 searches.
+        # Valores abaixo capturam input/output; reasoning/search entram na calibracao auto.
+        input_cost_per_mtok: 2.00
+        output_cost_per_mtok: 8.00
+        max_tokens: 8192
         rpm: 20
-        capabilities: [research, live_search, citations, fact_check]
-        tier: standard
+        capabilities: [deep_research, research, live_search, citations, fact_check]
+        tier: premium
         config_alias: perplexity
         status: active
 

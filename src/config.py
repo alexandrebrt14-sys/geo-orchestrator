@@ -104,15 +104,16 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
     "perplexity": LLMConfig(
         name="perplexity",
         provider=Provider.PERPLEXITY,
-        model="sonar-pro",
+        # 2026-04-14: upgrade sonar-pro -> sonar-deep-research para tarefas
+        # complexas (ebook, curso). Pricing oficial Perplexity: $2/M input,
+        # $8/M output + $3/M reasoning + $5 per 1000 searches.
+        model="sonar-deep-research",
         api_key_env="PERPLEXITY_API_KEY",
-        strengths=["live_research", "fact_checking", "citations", "web_search"],
-        # Sprint 5 (2026-04-08): aligned to catalog/model_catalog.yaml SoT.
-        # Antes: 0.001/0.001 (incorreto — subestimava custo real ~3x).
-        cost_per_1k_input=0.003,
-        cost_per_1k_output=0.015,
-        max_tokens=4096,
-        role="Pesquisador. Busca ao vivo com fontes, verificacao de fatos e citacoes.",
+        strengths=["deep_research", "live_research", "fact_checking", "citations", "web_search"],
+        cost_per_1k_input=0.002,
+        cost_per_1k_output=0.008,
+        max_tokens=8192,
+        role="Pesquisador profundo. Deep research com fontes multiplas, verificacao rigorosa e citacoes academicas.",
     ),
     "groq": LLMConfig(
         name="groq",
@@ -225,19 +226,24 @@ MODEL_TIERS: dict[str, list[str]] = {
 # Fallback chains per task type (ordered priority list)
 # ---------------------------------------------------------------------------
 
+# 2026-04-14: cobertura 5/5 — cada chain inclui TODOS os 5 providers canonicos.
+# Garante que se 4 falharem, o 5o ainda executa (graceful degradation total).
+# Ordem: primary -> fallback especialista -> ultimo recurso (groq geralmente
+# no fim por ser modelo menor, exceto em classification/translation onde e
+# primario).
 FALLBACK_CHAINS: dict[str, list[str]] = {
-    "research":        ["perplexity", "gpt4o", "gemini", "claude"],
-    "writing":         ["gpt4o", "claude", "perplexity", "gemini"],
-    "copywriting":     ["gpt4o", "claude", "perplexity", "gemini"],
-    "code":            ["claude", "gpt4o", "gemini", "perplexity"],
-    "review":          ["claude", "gpt4o", "gemini", "perplexity"],
-    "analysis":        ["gemini", "claude", "gpt4o", "perplexity"],
-    "seo":             ["gpt4o", "perplexity", "claude", "gemini"],
-    "data_processing": ["gemini", "gpt4o", "claude", "perplexity"],
-    "fact_check":      ["perplexity", "gemini", "claude", "gpt4o"],
-    "classification":  ["gemini", "claude", "gpt4o", "perplexity"],
-    "translation":     ["gpt4o", "gemini", "claude", "perplexity"],
-    "summarization":   ["gemini", "gpt4o", "claude", "perplexity"],
+    "research":        ["perplexity", "gpt4o", "gemini", "claude", "groq"],
+    "writing":         ["gpt4o", "claude", "perplexity", "gemini", "groq"],
+    "copywriting":     ["gpt4o", "claude", "perplexity", "gemini", "groq"],
+    "code":            ["claude", "gpt4o", "gemini", "perplexity", "groq"],
+    "review":          ["claude", "gpt4o", "gemini", "perplexity", "groq"],
+    "analysis":        ["gemini", "claude", "gpt4o", "perplexity", "groq"],
+    "seo":             ["gpt4o", "perplexity", "claude", "gemini", "groq"],
+    "data_processing": ["gemini", "gpt4o", "claude", "perplexity", "groq"],
+    "fact_check":      ["perplexity", "gemini", "claude", "gpt4o", "groq"],
+    "classification":  ["groq", "gemini", "claude", "gpt4o", "perplexity"],
+    "translation":     ["groq", "gpt4o", "gemini", "claude", "perplexity"],
+    "summarization":   ["groq", "gemini", "gpt4o", "claude", "perplexity"],
 }
 
 
@@ -245,25 +251,29 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
 # Timeout tiers by task type (seconds)
 # ---------------------------------------------------------------------------
 
+# 2026-04-14: timeouts elevados — demandas profundas (ebook, curso, research
+# academico) travavam em sonar-deep-research (60s nao basta) e em analises
+# multi-step do Gemini 2.5 Pro com thinking mode. Run bzqofvp7j perdeu 2/10
+# tasks por timeout. Nova banda dimensiona para deep work sem estourar UX.
 TIMEOUT_BY_TASK_TYPE: dict[str, float] = {
-    "research":        60.0,   # Perplexity needs time to search the web
-    "writing":        120.0,   # Long-form content generation
-    "copywriting":    120.0,   # Long-form content generation
-    "code":           300.0,   # Complex code generation (Claude needs time)
-    "architecture":   300.0,   # System design (Claude needs time)
-    "code_generation":300.0,   # Complex code generation (Claude needs time)
-    "review":         120.0,   # Detailed review takes time
-    "seo":             60.0,   # SEO analysis
-    "analysis":        45.0,   # Analytical tasks
-    "classification":  30.0,   # Quick classification
-    "summarization":   30.0,   # Fast summarization
-    "data_processing": 45.0,   # Bulk processing
-    "fact_check":      60.0,   # Needs web search
-    "translation":     60.0,   # Moderate
+    "research":        240.0,  # sonar-deep-research pode levar 2-4min por query profunda
+    "writing":        180.0,   # ebook/curso: +50% para long-form denso
+    "copywriting":    180.0,
+    "code":           420.0,   # +40% para Opus com raciocinio arquitetural
+    "architecture":   420.0,
+    "code_generation":420.0,
+    "review":         180.0,
+    "seo":            120.0,
+    "analysis":       120.0,   # Gemini 2.5 Pro thinking mode consome tempo
+    "classification":  45.0,
+    "summarization":   45.0,
+    "data_processing": 90.0,
+    "fact_check":     180.0,   # fact_check tambem usa sonar/perplexity
+    "translation":     90.0,
 }
 
 # Default timeout for unknown task types
-DEFAULT_TIMEOUT: float = 120.0
+DEFAULT_TIMEOUT: float = 180.0
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +282,11 @@ DEFAULT_TIMEOUT: float = 120.0
 
 from pathlib import Path  # noqa: E402
 
-# Maximum allowed cost (USD) per single orchestration run
-BUDGET_LIMIT: float = float(os.environ.get("GEO_BUDGET_LIMIT", "5.00"))
+# Maximum allowed cost (USD) per single orchestration run.
+# 2026-04-14: elevado de $5 para $15 — demandas profundas (ebook, curso,
+# deep research) chegavam perto do limite e bloqueavam early. $15 cobre
+# run tipico com Opus + sonar-deep-research sem cortar potencia.
+BUDGET_LIMIT: float = float(os.environ.get("GEO_BUDGET_LIMIT", "15.00"))
 
 # Base output directory (relative to project root)
 OUTPUT_DIR: Path = Path(os.environ.get("GEO_OUTPUT_DIR", "output"))
@@ -314,13 +327,18 @@ AVG_COST_PER_CALL: dict[str, float] = {
 # FinOps: Per-provider daily budget limits (USD)
 # ---------------------------------------------------------------------------
 
+# 2026-04-14: limites diarios elevados. Anthropic estourava em 1 run profundo
+# ($2/dia bloqueava Opus/Sonnet/Haiku simultaneamente). Nova banda permite
+# 3-5 demandas profundas/dia sem bloquear top-tier. Cap 80% continua protegendo
+# contra concentracao indevida; os limites abaixo sao o teto absoluto diario.
 FINOPS_DAILY_LIMITS: dict[str, float] = {
-    "anthropic":  float(os.environ.get("FINOPS_LIMIT_ANTHROPIC", "2.00")),
-    "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "2.00")),
-    "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "1.00")),   # Billing ativo (R$500 credito)
-    "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "1.00")),
-    "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "2.00")),     # Free tier generoso (300 RPM)
+    "anthropic":  float(os.environ.get("FINOPS_LIMIT_ANTHROPIC", "10.00")),  # 5x — familia Claude inteira (Opus+Sonnet+Haiku)
+    "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "8.00")),       # 4x — GPT-4o writing intensivo
+    "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "5.00")),       # 5x — Gemini 2.5 Pro com thinking mode
+    "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "5.00")),   # 5x — sonar-deep-research + search fees ($5/1000 searches)
+    "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "5.00")),         # 2.5x — volume alto em classification/summarization
 }
 
-# Global daily budget (sum of all providers, with safety margin)
-FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "8.00"))
+# Global daily budget (sum of all providers, with safety margin).
+# 2026-04-14: $8 -> $30 para acompanhar os limites por provider.
+FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "30.00"))

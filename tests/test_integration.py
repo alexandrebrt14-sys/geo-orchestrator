@@ -84,30 +84,32 @@ class TestConcentrationCap:
     """O cap 80% deve redirecionar tasks quando um provider satura."""
 
     def test_cap_constants_exist(self):
-        """Sanity check: as constantes do cap existem."""
-        assert CONCENTRATION_CAP == 0.80
-        assert CAP_MIN_TASKS == 3
+        """Sanity check: as constantes do cap existem.
+        2026-04-14: cap relaxado de 0.80 para 0.90, min_tasks 3 -> 5.
+        """
+        assert CONCENTRATION_CAP == 0.90
+        assert CAP_MIN_TASKS == 5
 
     def test_cap_does_not_kick_in_below_min_tasks(self):
-        """Cap so vale a partir de CAP_MIN_TASKS=3 tarefas atribuidas."""
+        """Cap so vale a partir de CAP_MIN_TASKS=5 tarefas atribuidas."""
         router = Router()
-        router._session_usage["claude"] = 1
+        router._session_usage["claude"] = 3
         router._session_usage["gpt4o"] = 0
-        # total=1, abaixo de CAP_MIN_TASKS — cap nao deve impedir
+        # total=3, abaixo de CAP_MIN_TASKS=5 — cap nao deve impedir
         assert router._would_exceed_cap("claude") is False
 
-    def test_cap_blocks_when_share_would_exceed_80pct(self):
+    def test_cap_blocks_when_share_would_exceed_90pct(self):
         """Atribuir mais 1 a um LLM ja saturado deve dar would_exceed=True."""
         router = Router()
-        # 4 claude + 1 gpt4o = 5 total. Atribuir +1 claude vai pra 5/6 = 83% > 80%
-        router._session_usage["claude"] = 4
+        # 10 claude + 1 gpt4o = 11 total. Atribuir +1 claude vai pra 11/12 = 91.6% > 90%
+        router._session_usage["claude"] = 10
         router._session_usage["gpt4o"] = 1
         assert router._would_exceed_cap("claude") is True
 
     def test_apply_cap_redirects_to_alternative_below_cap(self):
         """apply_concentration_cap deve devolver alternativa viavel."""
         router = Router()
-        router._session_usage["claude"] = 4
+        router._session_usage["claude"] = 10
         router._session_usage["gpt4o"] = 1
         chain = ["claude", "gpt4o", "gemini"]
         result = router.apply_concentration_cap("claude", chain)
@@ -165,10 +167,20 @@ class TestClaudeTierDowngrade:
         assert result == "claude_sonnet"
 
     def test_high_complexity_keeps_opus(self):
+        # 2026-04-14: Opus so para architecture/review/critical_review.
+        # Para manter Opus em high, task.type precisa estar no allowlist.
         router = Router()
-        task = _make_task("tC", "code", "high")
+        task = _make_task("tC", "architecture", "high")
         result = router.downgrade_claude_by_complexity("claude", task)
         assert result == "claude"
+
+    def test_high_complexity_code_downgrades_to_sonnet(self):
+        # 2026-04-14: code+high ja NAO mantem Opus; task_type fora do allowlist
+        # forca Sonnet mesmo em high (economia sem perda de qualidade material).
+        router = Router()
+        task = _make_task("tC2", "code", "high")
+        result = router.downgrade_claude_by_complexity("claude", task)
+        assert result == "claude_sonnet"
 
     def test_non_claude_unchanged(self):
         """Downgrade so se aplica a 'claude' (Opus). Outros LLMs passam direto."""
