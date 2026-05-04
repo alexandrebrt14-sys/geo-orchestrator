@@ -13,6 +13,10 @@ import time
 
 import httpx
 
+from .circuit_breaker import (
+    CircuitBreakerError,
+    circuit_breaker_registry,
+)
 from .config import LLMConfig, Provider
 from .connection_pool import ConnectionPool
 from .finops import BudgetExceededError, get_finops
@@ -23,6 +27,45 @@ from .tracer import TraceManager
 logger = logging.getLogger(__name__)
 
 
+# Provider-level circuit breaker config. Threshold/timeouts pequenos: o
+# objetivo nao e "isolar bug do provider" e sim "parar de queimar 50s/task
+# enquanto o provider esta em outage sustentado". 3 falhas seguidas em
+# qualquer task abrem o circuito por 90s; tasks subsequentes na chain pulam
+# o provider em 0ms ate o circuito tentar half-open.
+_BREAKER_FAILURE_THRESHOLD = 3
+_BREAKER_SUCCESS_THRESHOLD = 1
+_BREAKER_TIMEOUT_SECONDS = 90.0
+
+
+def get_provider_breaker(provider: Provider):
+    """Return the singleton circuit breaker for a provider."""
+    return circuit_breaker_registry.get_or_create(
+        name=f"provider:{provider.value}",
+        failure_threshold=_BREAKER_FAILURE_THRESHOLD,
+        success_threshold=_BREAKER_SUCCESS_THRESHOLD,
+        timeout=_BREAKER_TIMEOUT_SECONDS,
+        expected_exception=Exception,
+    )
+
+
+# Pricing real por modelo Gemini. Necessario porque o fallback intra-provider
+# Pro -> Flash usa um modelo diferente do que esta em LLMConfig; sem este map
+# o FinOps cobraria preco de Pro mesmo quando a chamada caiu para Flash.
+# Valores em USD por 1k tokens (input, output).
+_GEMINI_PRICING: dict[str, tuple[float, float]] = {
+    "gemini-2.5-pro":   (0.00125, 0.005),
+    "gemini-2.5-flash": (0.00030, 0.0025),
+}
+
+
+def _gemini_pricing_for(
+    model: str, default_in: float, default_out: float,
+) -> tuple[float, float]:
+    """Retorna (input_price, output_price) por 1k tokens para o modelo dado.
+    Se o modelo nao estiver mapeado, devolve o pricing do LLMConfig original."""
+    return _GEMINI_PRICING.get(model, (default_in, default_out))
+
+
 class LLMClient:
     """Async client that can query any of the 4 supported LLM providers.
 
@@ -30,14 +73,17 @@ class LLMClient:
     """
 
     # 2026-04-14: timeouts e retries mais generosos para demandas profundas.
-    # TIMEOUT default 60s -> 180s (maior parte dos task types agora usa
-    # per-task override, mas o default importa para path novo sem routing).
-    # MAX_RETRIES 2 -> 3 (sonar-deep-research falhava nos 2 retries porque
-    # cada query pode levar 90-180s + retry com backoff dobrado estouraria
-    # rapido o orcamento de tempo).
+    # 2026-05-02: separamos retry por classe de erro. 503/UNAVAILABLE em
+    # outage sustentado nao melhora em 14s — esperar e desperdicio. 429
+    # mantem backoff longo respeitando Retry-After.
     TIMEOUT = 180.0
     MAX_RETRIES = 3
-    BASE_RETRY_DELAY = 2.0  # seconds — exponential: 2s, 4s, 8s, 16s
+    BASE_RETRY_DELAY = 2.0  # 429: exponential 2s, 4s, 8s
+
+    # Backoff curto para 5xx/timeout — 1 retry rapido e cair pro fallback.
+    # Outage sustentado nao melhora esperando; melhor liberar a chain.
+    UNAVAILABLE_MAX_RETRIES = 1
+    UNAVAILABLE_RETRY_DELAY = 1.0
 
     def __init__(self, config: LLMConfig, timeout_override: float | None = None) -> None:
         self.config = config
@@ -48,7 +94,7 @@ class LLMClient:
         self,
         prompt: str,
         system: str = "",
-        max_tokens: int = 4000,
+        max_tokens: int = 16000,
     ) -> LLMResponse:
         """Send a prompt to the configured LLM and return a unified response.
 
@@ -66,7 +112,20 @@ class LLMClient:
         tracer = TraceManager.get_instance()
         last_error: Exception | None = None
         provider_name = self.config.provider.value
+        breaker = get_provider_breaker(self.config.provider)
 
+        # Circuit breaker: provider em OPEN -> raise imediato sem queimar
+        # rate limiter, conexao ou ate retry interno. Pipeline cai pro
+        # proximo da fallback chain em ~0ms em vez de ~50s.
+        if breaker.state.value == "OPEN":
+            raise CircuitBreakerError(
+                f"Provider {provider_name} circuit OPEN — skipping to fallback. "
+                f"Stats: {breaker.stats}"
+            )
+
+        # Limite total de tentativas e calculado por classe de erro a cada
+        # attempt; cap absoluto = MAX_RETRIES (compatibilidade com codigo
+        # legado que assume <=4 tentativas).
         for attempt in range(1 + self.MAX_RETRIES):
             try:
                 # Rate limiter span
@@ -92,54 +151,80 @@ class LLMClient:
                     tokens_out=response.tokens_output,
                     cost=response.cost,
                 )
+                # Sucesso: registra no breaker (fecha HALF_OPEN -> CLOSED)
+                breaker._on_success()
                 return response
 
             except httpx.HTTPStatusError as exc:
                 last_error = exc
                 status = exc.response.status_code
-                retryable = status in (429, 500, 502, 503)
+
+                # 4xx (exceto 429) NAO sao falha de provider — registrar como
+                # falha do breaker mascararia bugs do nosso lado (auth, payload).
+                # Apenas 429/5xx contam para o circuit breaker.
+                if status in (429, 500, 502, 503, 504):
+                    breaker._on_failure()
 
                 # Finish the LLM span with error
                 if 'llm_span' in dir():
                     tracer.finish_span(llm_span, status="error", http_status=status)
 
-                if retryable and attempt < self.MAX_RETRIES:
+                # Backoff por classe:
+                # - 429: backoff exponencial classico, respeita Retry-After
+                # - 5xx (500/502/503/504): 1 retry curto (1s) e cai pro fallback
+                # - 4xx (auth/bad request): nao retentar
+                if status == 429 and attempt < self.MAX_RETRIES:
+                    retry_budget = self.MAX_RETRIES
                     wait_time = self._compute_backoff(attempt, exc)
+                elif status in (500, 502, 503, 504) and attempt < self.UNAVAILABLE_MAX_RETRIES:
+                    retry_budget = self.UNAVAILABLE_MAX_RETRIES
+                    wait_time = self.UNAVAILABLE_RETRY_DELAY + random.uniform(0.0, 0.5)
+                else:
+                    raise
 
-                    # Retry span
-                    retry_span = tracer.start_span(
-                        f"llm.retry.{provider_name}",
-                        provider=provider_name,
-                        attempt=attempt + 1,
-                        http_status=status,
-                        wait_seconds=round(wait_time, 2),
-                        is_rate_limit=status == 429,
+                # Retry span
+                retry_span = tracer.start_span(
+                    f"llm.retry.{provider_name}",
+                    provider=provider_name,
+                    attempt=attempt + 1,
+                    http_status=status,
+                    wait_seconds=round(wait_time, 2),
+                    is_rate_limit=status == 429,
+                    is_unavailable=status in (500, 502, 503, 504),
+                )
+                logger.warning(
+                    "Retry %d/%d for %s (HTTP %d): waiting %.1fs",
+                    attempt + 1,
+                    retry_budget,
+                    self.config.provider.value,
+                    status,
+                    wait_time,
+                )
+                await asyncio.sleep(wait_time)
+                tracer.finish_span(retry_span, status="ok")
+                # Re-checa circuit antes de continuar — outras tasks paralelas
+                # podem ter aberto o circuito enquanto esperavamos.
+                if breaker.state.value == "OPEN":
+                    raise CircuitBreakerError(
+                        f"Provider {provider_name} tripped circuit during retry — "
+                        f"abandoning attempts."
                     )
-
-                    logger.warning(
-                        "Retry %d/%d for %s (HTTP %d): waiting %.1fs",
-                        attempt + 1,
-                        self.MAX_RETRIES,
-                        self.config.provider.value,
-                        status,
-                        wait_time,
-                    )
-                    await asyncio.sleep(wait_time)
-                    tracer.finish_span(retry_span, status="ok")
-                    continue
-                raise
+                continue
 
             except httpx.TimeoutException as exc:
                 last_error = exc
+                # Timeout conta como falha de provider (provider esta lento
+                # demais ou indisponivel) — alimenta o breaker.
+                breaker._on_failure()
 
                 # Finish the LLM span with error
                 if 'llm_span' in dir():
                     tracer.finish_span(llm_span, status="error", error="timeout")
 
-                if attempt < self.MAX_RETRIES:
-                    wait_time = self._compute_backoff(attempt)
+                # Timeout: 1 retry curto e desiste — consistente com 5xx.
+                if attempt < self.UNAVAILABLE_MAX_RETRIES:
+                    wait_time = self.UNAVAILABLE_RETRY_DELAY + random.uniform(0.0, 0.5)
 
-                    # Retry span
                     retry_span = tracer.start_span(
                         f"llm.retry.{provider_name}",
                         provider=provider_name,
@@ -151,12 +236,16 @@ class LLMClient:
                     logger.warning(
                         "Retry %d/%d for %s (timeout): waiting %.1fs",
                         attempt + 1,
-                        self.MAX_RETRIES,
+                        self.UNAVAILABLE_MAX_RETRIES,
                         self.config.provider.value,
                         wait_time,
                     )
                     await asyncio.sleep(wait_time)
                     tracer.finish_span(retry_span, status="ok")
+                    if breaker.state.value == "OPEN":
+                        raise CircuitBreakerError(
+                            f"Provider {provider_name} tripped circuit during timeout retry."
+                        )
                     continue
                 raise
 
@@ -363,10 +452,45 @@ class LLMClient:
     # Google (Gemini)
     # ------------------------------------------------------------------
 
+    # 2026-05-02 v3 — Fallback intra-provider para outage 503 sustentado.
+    # Diagnostico do dia: gemini-2.5-pro com 60% taxa de 503 ("high demand")
+    # em probe direto na API; gemini-2.5-flash 100% saudavel mesma chave.
+    # Em vez de propagar 503 e queimar slot do circuit breaker (que abre
+    # google inteiro, incluindo flash saudavel), tenta-se imediatamente o
+    # modelo de fallback dentro do mesmo provider antes de escalar erro.
+    GEMINI_INTRA_FALLBACK: dict[str, str] = {
+        "gemini-2.5-pro": "gemini-2.5-flash",
+    }
+
     async def _call_google(
         self, prompt: str, system: str, max_tokens: int
     ) -> LLMResponse:
-        model = self.config.model
+        primary_model = self.config.model
+        try:
+            return await self._call_google_model(
+                primary_model, prompt, system, max_tokens,
+            )
+        except httpx.HTTPStatusError as exc:
+            fallback_model = self.GEMINI_INTRA_FALLBACK.get(primary_model)
+            if exc.response.status_code != 503 or fallback_model is None:
+                raise
+            logger.warning(
+                "Gemini intra-provider fallback: %s -> %s (HTTP 503 high demand)",
+                primary_model, fallback_model,
+            )
+            return await self._call_google_model(
+                fallback_model, prompt, system, max_tokens,
+                fallback_from=primary_model,
+            )
+
+    async def _call_google_model(
+        self,
+        model: str,
+        prompt: str,
+        system: str,
+        max_tokens: int,
+        fallback_from: str | None = None,
+    ) -> LLMResponse:
         api_key = self.config.api_key or ""
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
@@ -413,17 +537,21 @@ class LLMClient:
         usage = data.get("usageMetadata", {})
         tokens_in = usage.get("promptTokenCount", 0)
         tokens_out = usage.get("candidatesTokenCount", 0)
-        cost = (
-            tokens_in / 1000 * self.config.cost_per_1k_input
-            + tokens_out / 1000 * self.config.cost_per_1k_output
+
+        # Quando o fallback intra-provider acionou, aplicar o pricing real
+        # do modelo usado (Flash e ~5x mais barato que Pro). Sem isso, FinOps
+        # superestima custo do fallback.
+        in_price, out_price = _gemini_pricing_for(
+            model, self.config.cost_per_1k_input, self.config.cost_per_1k_output,
         )
+        cost = tokens_in / 1000 * in_price + tokens_out / 1000 * out_price
 
         return LLMResponse(
             text=text,
             tokens_input=tokens_in,
             tokens_output=tokens_out,
             cost=cost,
-            model=self.config.model,
+            model=model,
             provider=self.config.provider.value,
         )
 

@@ -75,7 +75,11 @@ class AnalyzerAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Any,
-        model_name: str = "gemini-2.0-flash",
+        # 2026-05-02: gemini-2.0-flash retorna 404 "no longer available to new
+        # users" — Google deprecou o modelo. Probe direto na API confirmou em
+        # 2026-05-02. Default migrado para gemini-2.5-flash (1M ctx, mesmo
+        # endpoint, atualmente saudavel mesma chave).
+        model_name: str = "gemini-2.5-flash",
         cost_per_1k_input: float = 0.000075,
         cost_per_1k_output: float = 0.0003,
     ):
@@ -112,7 +116,7 @@ class AnalyzerAgent(BaseAgent):
             "contents": gemini_contents,
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 4096,
+                "maxOutputTokens": 32768,
                 "responseMimeType": "application/json",
             },
         }
