@@ -1,0 +1,32 @@
+                          Status dos LLMs (canonicos)                          
+┌────────────┬────────────┬────────────┬────────────┬────────────┬────────────┐
+│ LLM        │ Modelo     │ Provider   │ Strengths  │ API Key    │ Status     │
+├────────────┼────────────┼────────────┼────────────┼────────────┼────────────┤
+│ claude     │ claude-op… │ anthropic  │ architect… │ sk-ant-a.… │ Configura… │
+│            │            │            │ complex_c… │            │            │
+│            │            │            │ critical_… │            │            │
+│ gpt4o      │ gpt-4o     │ openai     │ long_form… │ sk-proj-.… │ Configura… │
+│            │            │            │ copywriti… │            │            │
+│            │            │            │ seo_conte… │            │            │
+│ gemini     │ gemini-2.… │ google     │ deep_anal… │ AIzaSyCT.… │ Configura… │
+│            │            │            │ bulk_proc… │            │            │
+│            │            │            │ summariza… │            │            │
+│ gemini_fl… │ gemini-2.… │ google     │ fast_infe… │ AIzaSyCT.… │ Configura… │
+│            │            │            │ bulk_proc… │            │            │
+│            │            │            │ summariza… │            │            │
+│ perplexity │ sonar-dee… │ perplexity │ deep_rese… │ pplx-Ksr.… │ Configura… │
+│            │            │            │ live_rese… │            │            │
+│            │            │            │ fact_chec… │            │            │
+│ groq       │ llama-3.3… │ groq       │ ultra_fas… │ gsk_o1LJ.… │ Configura… │
+│            │            │            │ code_revi… │            │            │
+│            │            │            │ quick_ana… │            │            │
+│ groq_heavy │ llama-3.3… │ groq       │ fast_reas… │ gsk_o1LJ.… │ Configura… │
+│            │            │            │ code_revi… │            │            │
+│            │            │            │ deep_clas… │            │            │
+│ claude_so… │ claude-so… │ anthropic  │ balanced_… │ sk-ant-a.… │ Configura… │
+│            │            │            │ code_revi… │            │            │
+│            │            │            │ writing_l… │            │            │
+│ claude_ha… │ claude-ha… │ anthropic  │ fast_infe… │ sk-ant-a.… │ Configura… │
+│            │            │            │ classific… │            │            │
+│            │            │            │ summariza… │            │            │
+└────────────┴────────────┴────────────┴────────────┴────────────┴────────────┘

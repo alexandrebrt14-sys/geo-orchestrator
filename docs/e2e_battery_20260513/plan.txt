@@ -1,0 +1,43 @@
+Decompondo demanda via Orchestrator v2.0...
+Traceback (most recent call last):
+  File "C:\Sandyboxclaude\geo-orchestrator\cli.py", line 1411, in <module>
+    cli()
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\site-packages\click\core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\site-packages\click\core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\site-packages\click\core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\site-packages\click\core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\site-packages\click\core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Sandyboxclaude\geo-orchestrator\cli.py", line 406, in plan
+    plan_obj = asyncio.run(orch.decompose(demand))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Sandyboxclaude\geo-orchestrator\src\orchestrator.py", line 213, in decompose
+    tasks = self._parse_plan(response.text, demand)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Sandyboxclaude\geo-orchestrator\src\orchestrator.py", line 1164, in _parse_plan
+    Task(
+  File "C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\site-packages\pydantic\main.py", line 250, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Task
+dependencies.0
+  Input should be a valid string [type=string_type, input_value={'task_id': 't1', 'contex...taformas identificadas'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/string_type

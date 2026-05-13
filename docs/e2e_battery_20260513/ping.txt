@@ -1,0 +1,13 @@
+═══════════════════════════════════════════════
+  geo-bridge ping — health check 5 LLMs
+═══════════════════════════════════════════════
+
+Provider                     Status Latencia   HTTP   Custo USD    Resposta
+--------------------------------------------------------------------------------------------------------------
+Anthropic claude-opus-4.6    OK        4.92s   200    $0.000495    OK
+OpenAI gpt-4o                OK        3.58s   200    $0.000042    OK
+Google gemini-2.5-pro        OK        2.95s   200    $0.000008    {'candidates': [{'content': {'role': 'model'}, 'finishReason': 'MAX_TOKENS', 'in
+Perplexity sonar-pro         OK        2.54s   200    $0.005036    OK
+Groq llama-3.3-70b           OK        0.70s   200    $0.000026    OK
+--------------------------------------------------------------------------------------------------------------
+TOTAL custo do teste:                                      $0.005607

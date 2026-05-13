@@ -1,0 +1,34 @@
+                         LLMs Configurados (canonicos)                         
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬───────────┐
+│          │          │          │          │ Custo/1K │          │           │
+│          │          │          │ Custo/1K │      Out │      Max │           │
+│ ID       │ Modelo   │ Provider │ In (US$) │    (US$) │   Tokens │ Strengths │
+├──────────┼──────────┼──────────┼──────────┼──────────┼──────────┼───────────┤
+│ claude   │ claude-… │ anthrop… │ 0.015000 │ 0.075000 │    32000 │ architec… │
+│          │          │          │          │          │          │ complex_… │
+│          │          │          │          │          │          │ critical… │
+│ gpt4o    │ gpt-4o   │ openai   │ 0.002500 │ 0.010000 │    16384 │ long_for… │
+│          │          │          │          │          │          │ copywrit… │
+│          │          │          │          │          │          │ seo_cont… │
+│ gemini   │ gemini-… │ google   │ 0.001250 │ 0.005000 │    65536 │ deep_ana… │
+│          │          │          │          │          │          │ bulk_pro… │
+│          │          │          │          │          │          │ summariz… │
+│ gemini_… │ gemini-… │ google   │ 0.000300 │ 0.002500 │    65536 │ fast_inf… │
+│          │          │          │          │          │          │ bulk_pro… │
+│          │          │          │          │          │          │ summariz… │
+│ perplex… │ sonar-d… │ perplex… │ 0.002000 │ 0.008000 │     8192 │ deep_res… │
+│          │          │          │          │          │          │ live_res… │
+│          │          │          │          │          │          │ fact_che… │
+│ groq     │ llama-3… │ groq     │ 0.000590 │ 0.000790 │    32768 │ ultra_fa… │
+│          │          │          │          │          │          │ code_rev… │
+│          │          │          │          │          │          │ quick_an… │
+│ groq_he… │ llama-3… │ groq     │ 0.001500 │ 0.002000 │    32768 │ fast_rea… │
+│          │          │          │          │          │          │ code_rev… │
+│          │          │          │          │          │          │ deep_cla… │
+│ claude_… │ claude-… │ anthrop… │ 0.003000 │ 0.015000 │    64000 │ balanced… │
+│          │          │          │          │          │          │ code_rev… │
+│          │          │          │          │          │          │ writing_… │
+│ claude_… │ claude-… │ anthrop… │ 0.000800 │ 0.004000 │    64000 │ fast_inf… │
+│          │          │          │          │          │          │ classifi… │
+│          │          │          │          │          │          │ summariz… │
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴───────────┘

@@ -1,0 +1,161 @@
+┌─────────────────────────── geo-orchestrator v2.0 ───────────────────────────┐
+│ Demanda: Liste 5 KPIs canônicos de GEO (Generative Engine Optimization) com │
+│ definição de 1 linha cada. Saída: tabela markdown. Nada além disso.         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                          Banca de Modelos (canonica)                          
+ LLM            Modelo                Provider    Papel                 Status 
+ claude         claude-opus-4-6       anthropic   Arquiteto e revisor   ativo  
+                                                  principal.                   
+                                                  Raciocinio complexo,         
+                                                  codigo c...                  
+ gpt4o          gpt-4o                openai      Redator e             ativo  
+                                                  copywriter. Conteudo         
+                                                  longo, SEO, traducao         
+                                                  e texto ...                  
+ gemini         gemini-2.5-pro        google      Analista profundo.    ativo  
+                                                  Processamento em             
+                                                  massa, resumos,              
+                                                  classifi...                  
+ gemini_flash   gemini-2.5-flash      google      Gemini Flash —        ativo  
+                                                  analise rapida, bulk         
+                                                  processing,                  
+                                                  classificaca...              
+ perplexity     sonar-deep-research   perplexity  Pesquisador           ativo  
+                                                  profundo. Deep               
+                                                  research com fontes          
+                                                  multiplas, ve...             
+ groq           llama-3.3-70b-versa…  groq        Velocista.            ativo  
+                                                  Inferencia                   
+                                                  ultra-rapida (~10x           
+                                                  mais rapido que              
+                                                  out...                       
+ groq_heavy     llama-3.3-70b-versa…  groq        Groq Heavy — modelo   ativo  
+                                                  de raciocinio ainda          
+                                                  na infra Groq. Para          
+                                                  ...                          
+ claude_sonnet  claude-sonnet-4-6     anthropic   Sonnet 4.6 — tier     ativo  
+                                                  intermediario da             
+                                                  familia Claude. 5x           
+                                                  mais b...                    
+ claude_haiku   claude-haiku-4-5      anthropic   Haiku 4.5 — tier      ativo  
+                                                  mais barato da               
+                                                  familia Claude. ~19x         
+                                                  mais ba...                   
+
+Pipeline v2.0: PromptRefiner -> Decompose -> SmartRouter -> CodeFirst -> Cache 
+-> Pipeline (cap 80% + quality + fallback)
+
+Running cost US$ 0.0772 exceeds 2x estimate (US$ 0.0358).
+┌─────────────────────── Status dos LLMs ────────────────────────┐
+│ LLM          │ Tarefas │ Completas │ Tokens │  Custo  │ Status │
+├──────────────┼─────────┼───────────┼────────┼─────────┼────────┤
+│ claude       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gpt4o        │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini_flash │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ perplexity   │    1    │     1     │  9.3k  │  $0.063 │  ████  │
+│ groq         │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ groq_heavy   │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_sonnet │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_haiku │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+└──────────────┴─────────┴───────────┴────────┴─────────┴────────┘
+┌─────────────────────── Status dos LLMs ────────────────────────┐
+│ LLM          │ Tarefas │ Completas │ Tokens │  Custo  │ Status │
+├──────────────┼─────────┼───────────┼────────┼─────────┼────────┤
+│ claude       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gpt4o        │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini_flash │    1    │     1     │  2.5k  │  $0.001 │  ████  │
+│ perplexity   │    1    │     1     │  9.3k  │  $0.063 │  ████  │
+│ groq         │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ groq_heavy   │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_sonnet │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_haiku │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+└──────────────┴─────────┴───────────┴────────┴─────────┴────────┘
+┌─────────────────────── Status dos LLMs ────────────────────────┐
+│ LLM          │ Tarefas │ Completas │ Tokens │  Custo  │ Status │
+├──────────────┼─────────┼───────────┼────────┼─────────┼────────┤
+│ claude       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gpt4o        │    1    │     1     │  2.1k  │  $0.006 │  ████  │
+│ gemini       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini_flash │    1    │     1     │  2.5k  │  $0.001 │  ████  │
+│ perplexity   │    1    │     1     │  9.3k  │  $0.063 │  ████  │
+│ groq         │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ groq_heavy   │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_sonnet │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_haiku │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+└──────────────┴─────────┴───────────┴────────┴─────────┴────────┘
+┌─────────────────────── Status dos LLMs ────────────────────────┐
+│ LLM          │ Tarefas │ Completas │ Tokens │  Custo  │ Status │
+├──────────────┼─────────┼───────────┼────────┼─────────┼────────┤
+│ claude       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gpt4o        │    1    │     1     │  2.1k  │  $0.006 │  ████  │
+│ gemini       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini_flash │    2    │     2     │  4.5k  │  $0.002 │  ████  │
+│ perplexity   │    1    │     1     │  9.3k  │  $0.063 │  ████  │
+│ groq         │    1    │     1     │  2.1k  │  $0.001 │  ████  │
+│ groq_heavy   │    1    │     1     │  2.1k  │  $0.003 │  ████  │
+│ claude_sonnet │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_haiku │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+└──────────────┴─────────┴───────────┴────────┴─────────┴────────┘
+┌─────────────────────── Status dos LLMs ────────────────────────┐
+│ LLM          │ Tarefas │ Completas │ Tokens │  Custo  │ Status │
+├──────────────┼─────────┼───────────┼────────┼─────────┼────────┤
+│ claude       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gpt4o        │    1    │     1     │  2.1k  │  $0.006 │  ████  │
+│ gemini       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini_flash │    2    │     2     │  4.5k  │  $0.002 │  ████  │
+│ perplexity   │    1    │     1     │  9.3k  │  $0.063 │  ████  │
+│ groq         │    2    │     2     │  4.4k  │  $0.003 │  ████  │
+│ groq_heavy   │    1    │     1     │  2.1k  │  $0.003 │  ████  │
+│ claude_sonnet │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_haiku │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+└──────────────┴─────────┴───────────┴────────┴─────────┴────────┘
+
+                              Resumo da Execucao                               
+┌────────┬─────────┬─────────┬────────┬─────────┬─────────┬─────────┬─────────┐
+│        │         │         │        │   Tempo │  Tokens │  Tokens │   Custo │
+│ Tarefa │ Tipo    │ LLM     │ Status │     (s) │      In │     Out │   (US$) │
+├────────┼─────────┼─────────┼────────┼─────────┼─────────┼─────────┼─────────┤
+│ t1     │ resear… │ perple… │ OK     │   107.7 │    1872 │    7410 │  0.0630 │
+│ t2     │ analys… │ gemini… │ OK     │     4.3 │    2270 │     243 │  0.0013 │
+│ t3     │ writing │ gpt4o   │ OK     │     4.4 │    1946 │     145 │  0.0063 │
+│ t4     │ classi… │ groq    │ OK     │     0.6 │    2077 │      24 │  0.0012 │
+│ t5     │ code_r… │ groq_h… │ OK     │     0.6 │    2080 │      45 │  0.0032 │
+│ t6     │ analys… │ gemini… │ OK     │     3.4 │    1986 │      31 │  0.0007 │
+│ t7     │ summar… │ groq    │ OK     │     1.2 │    2041 │     254 │  0.0014 │
+├────────┼─────────┼─────────┼────────┼─────────┼─────────┼─────────┼─────────┤
+│ TOTAL  │         │         │        │   122.3 │   14272 │    8152 │  0.0772 │
+└────────┴─────────┴─────────┴────────┴─────────┴─────────┴─────────┴─────────┘
+
+                           Uso por LLM (5 canonicos)                           
+┌────────┬────────┬────┬───────┬─────────┬────────┬────────┬─────────┬────────┐
+│        │        │    │       │         │        │  Custo │   Tempo │        │
+│ Provi… │ Taref… │ OK │ Falha │ Share % │ Tokens │  (US$) │     (s) │ Cober… │
+├────────┼────────┼────┼───────┼─────────┼────────┼────────┼─────────┼────────┤
+│ Anthr… │   0    │ 0  │   0   │      0% │      0 │ 0.0000 │     0.0 │  NAO   │
+│        │        │    │       │         │        │        │         │ USADO  │
+│ OpenA… │   1    │ 1  │   0   │     25% │  2,091 │ 0.0063 │     4.4 │ USADO  │
+│ Googl… │   0    │ 0  │   0   │      0% │      0 │ 0.0000 │     0.0 │  NAO   │
+│        │        │    │       │         │        │        │         │ USADO  │
+│ Perpl… │   1    │ 1  │   0   │     25% │  9,282 │ 0.0630 │   107.7 │ USADO  │
+│ Groq/… │   2    │ 2  │   0   │     50% │  4,396 │ 0.0026 │     1.8 │ USADO  │
+└────────┴────────┴────┴───────┴─────────┴────────┴────────┴─────────┴────────┘
+
+Cobertura de LLMs: 3/5 (60%)
+
+            Indicadores v2.0            
+ Indicador                        Valor 
+ Tarefas concluidas                   7 
+ Tarefas falhas                       0 
+ Tarefas em cache                     0 
+ Tarefas deduplicadas                 0 
+ Retentativas por qualidade           0 
+ Custo estimado              US$ 0.0358 
+ Custo real                  US$ 0.0772 
+ Tempo total                     143.9s 
+ Limite de orcamento          US$ 15.00 
+
+Relatorio salvo em: output\execution_20260513_190051.json
+
+Todas as tarefas concluidas com sucesso.
