@@ -123,7 +123,8 @@ gold_line(s, 0.9)
 add_text(s, 0.8, 1.2, 11, 0.7, "De montagem de semijoias\na R$ 12 milhoes em receita.", size=32, color=BLACK, bold=True, font_name="Georgia")
 add_bullet(s, 0.8, 2.5, 5.5, [
     "2008 — Patricia e Alexandre Caramaschi fundam a Herreira em Goiania",
-    "2011 — Investem R$ 1 milhao em fabrica propria de semijoias",
+    "2011 — Investem R$ 1 milhao em fabrica propria de semijoias (relancamento da marca atual)",
+    "2016 — Abertura da filial atacado em Sao Paulo (Edificio The Office, Frei Caneca)",
     "110 funcionarios, vendas para todos os estados + EUA e Europa",
     "10-15 mil pecas/mes no atacado, presenca em novelas da Globo",
     "Marcas: Herreira + Aulore + Vitesse (Grupo HAV)",

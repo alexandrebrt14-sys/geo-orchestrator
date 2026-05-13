@@ -74,11 +74,14 @@ class TestSmartRouteDowngrade:
         return Task(id="t1", type=ttype, description="x", complexity=TaskComplexity(complexity_str))
 
     def test_smart_route_downgrades_low_complexity(self):
+        """2026-05-02: code primary virou gemini. Para validar o
+        downgrade interno Claude, usamos task.type=architecture (unico
+        onde Claude continua primary)."""
         from src.smart_router import DemandTier
         router = self._make_router()
-        task = self._make_task("code", "low")
+        task = self._make_task("architecture", "low")
         cfg = router.smart_route(task, DemandTier.MODERATE)
-        # Sem stats: primary=claude vence, e o downgrade aplica para Haiku
+        # Architecture+low: Opus vira primary mas downgrade aplica para Haiku
         assert cfg.name in ("claude_haiku", "claude_sonnet"), (
             f"Esperava downgrade para Haiku/Sonnet em low complexity, recebi {cfg.name}"
         )
@@ -91,13 +94,14 @@ class TestSmartRouteDowngrade:
         cfg = router.smart_route(task, DemandTier.COMPLEX)
         assert cfg.name == "claude"
 
-    def test_smart_route_downgrades_code_high_to_sonnet(self):
-        # 2026-04-14: code+high agora cai para Sonnet (task_type fora do allowlist).
+    def test_smart_route_code_high_goes_to_gemini(self):
+        """2026-05-02: code virou primary=gemini. Opus reservado a
+        architecture/critical_review."""
         from src.smart_router import DemandTier
         router = self._make_router()
         task = self._make_task("code", "high")
         cfg = router.smart_route(task, DemandTier.COMPLEX)
-        assert cfg.name == "claude_sonnet"
+        assert cfg.name == "gemini"
 
     def test_smart_route_does_not_affect_non_claude(self):
         from src.smart_router import DemandTier
@@ -132,27 +136,28 @@ class TestSmartRouteDowngrade:
         assert router.downgrade_claude_by_complexity("claude", task_arch_high) == "claude"
 
 
-# ─── Fix #21: Orchestrator.decompose() usa Sonnet ──────────────────────
+# ─── Decompose LLM (2026-05-02: Sonnet -> Gemini 2.5 Pro) ─────────────
 
-class TestDecomposerUsesSonnet:
-    """Orchestrator._claude_cfg deve apontar para claude_sonnet (sprint 4)."""
+class TestDecomposerUsesGemini:
+    """Orchestrator._claude_cfg agora aponta para gemini (rebalanceamento
+    2026-05-02). Fallback chain: gemini -> claude_sonnet -> claude (Opus).
+    Nome do atributo mantido por compat (legado, antes era 'claude_cfg')."""
 
-    def test_orchestrator_claude_cfg_is_sonnet(self):
+    def test_orchestrator_decompose_cfg_is_gemini(self):
         from src.orchestrator import Orchestrator
         from src.config import LLM_CONFIGS
         orch = Orchestrator(smart=True)
-        # _claude_cfg eh o config usado para decompose. Sprint 4: Sonnet.
-        assert orch._claude_cfg.name == "claude_sonnet"
-        assert orch._claude_cfg.model == LLM_CONFIGS["claude_sonnet"].model
+        assert orch._claude_cfg.name == "gemini"
+        assert orch._claude_cfg.model == LLM_CONFIGS["gemini"].model
 
-    def test_orchestrator_falls_back_to_opus_if_sonnet_missing(self):
-        """Se claude_sonnet for removido (regressao), deve cair pra claude (Opus)."""
-        # Apenas verifica que o codigo usa .get com fallback, nao .[] direto
+    def test_orchestrator_falls_back_to_sonnet_if_gemini_missing(self):
+        """Se gemini for removido, deve cair para claude_sonnet ou claude."""
         from src import orchestrator
         import inspect
         source = inspect.getsource(orchestrator.Orchestrator.__init__)
-        assert "claude_sonnet" in source
-        assert "or LLM_CONFIGS" in source or '.get(' in source
+        assert "gemini" in source
+        assert "claude_sonnet" in source  # fallback explicito
+        assert ".get(" in source
 
 
 # ─── Fix #23: DECOMPOSE_SYSTEM tem regra reforcada de review ──────────

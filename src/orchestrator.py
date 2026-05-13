@@ -40,31 +40,44 @@ from .tracer import TraceManager
 logger = logging.getLogger(__name__)
 
 # Prompt template for task decomposition
+# 2026-05-02 — REBALANCEAMENTO. Gemini 2.5 Pro e Groq sao protagonistas.
+# Opus reservado a "architecture" e "critical_review". Decompose roda em
+# Gemini 2.5 Pro (1M context, ~5x mais barato que Sonnet) com Sonnet como
+# fallback automatico via FALLBACK_CHAINS["decomposition"].
 DECOMPOSE_SYSTEM = """\
 Você é o orquestrador da Brasil GEO. Sua função: decompor demandas complexas \
-em tarefas discretas e executáveis distribuídas entre 5 LLMs diferentes.
+em tarefas discretas e executáveis, distribuindo carga de forma balanceada \
+entre 5 provedores. O objetivo de custo/latência é manter Anthropic ≤ 30% \
+das tasks (Opus apenas onde realmente precisa).
 
-ROTEAMENTO OBRIGATÓRIO — você DEVE usar os 5 LLMs:
-- research / fact_check → Perplexity sonar-pro (pesquisa ao vivo com fontes)
-- analysis / data_processing → Gemini 2.5 Flash (rápido e econômico)
-- writing / copywriting / seo → GPT-4o (melhor texto longo em PT-BR)
-- code / review / architecture → Claude Opus (raciocínio profundo)
-- classification / summarization / translation → Groq Llama 3.3 70B (ultra-rápido)
+ROTEAMENTO POR FORÇA REAL DE CADA LLM:
+- research / fact_check → Perplexity sonar-deep-research (pesquisa ao vivo + citações).
+- analysis / data_processing / code / review → Gemini 2.5 Pro (1M context, raciocínio
+  comparável a Opus por ~1/15 do custo; melhor para revisar arquivos grandes inteiros).
+- writing / copywriting / seo → GPT-4o (texto longo em PT-BR).
+- classification / summarization / translation / extraction → Groq (ultra-rápido,
+  ~10x mais barato; ideal para triagem, resumos, traduções, extração estruturada).
+- code_review (sub-review de código rápido) → Groq Heavy (modelo grande na infra Groq,
+  raciocínio + velocidade).
+- architecture / critical_review → Claude Opus (APENAS aqui — raciocínio arquitetural
+  ou validação final crítica). Para code/review padrão NÃO use Opus.
 
-REGRAS DE EQUILÍBRIO (OBRIGATÓRIO — bridge force-all-models):
-- TODOS os 5 LLMs DEVEM ser usados em TODA execução, sem exceção.
-- Mínimo absoluto: 5 tarefas (1 por LLM). Se a demanda é simples, crie subtarefas auxiliares.
-- Nunca concentre mais de 35% das tarefas em um único LLM.
-- Wave 1 DEVE ter exatamente 5 tarefas paralelas (1 por LLM).
-- Se sobram tarefas, distribua round-robin entre os 5 LLMs.
-- O router faz enforcement automático via force_all_models_route().
+REGRAS DE EQUILÍBRIO:
+- Distribua entre os 5 provedores quando a demanda permitir.
+- Limite tasks de architecture/critical_review a no máximo 30% do plano.
+- Nunca concentre mais de 30% das tarefas em Anthropic (Opus + Sonnet + Haiku somados).
+- Maximize uso de Gemini 2.5 Pro (analysis, code, review) e Groq (classification,
+  summarization, translation) — eles são protagonistas em demandas típicas.
+- Wave 1 deve ter o máximo de tarefas paralelas que a demanda comporte.
 
 REGRAS DE ECONOMIA DE TOKENS (FinOps):
-- Tarefas de classificação e triagem: use Groq (custo 10x menor que Claude).
-- Consolidação de dados: use Gemini (custo 100x menor que Claude).
-- Reserve Claude APENAS para arquitetura, código de produção e revisão final.
+- Triagem, classificação, tradução, resumo → Groq (10x mais barato que Opus).
+- Consolidação de dados, code review padrão, análise profunda → Gemini 2.5 Pro
+  (~20x mais barato que Opus, qualidade de raciocínio comparável).
+- Extração estruturada / sub-review de código → Groq Heavy.
+- Architecture / critical_review → Claude Opus (APENAS).
 - Inclua max_tokens sugerido por tarefa: simples=500, média=2000, complexa=4000.
-- Se uma tarefa pode ser resolvida por um LLM barato, NUNCA use Claude.
+- Se uma tarefa pode ser resolvida por Gemini ou Groq, NUNCA use Opus.
 
 REGRAS DE QUALIDADE TEXTUAL PT-BR:
 - Todas as descrições de tarefa DEVEM ter acentuação completa (não, você, produção, análise).
@@ -83,27 +96,29 @@ REGRAS DE FEEDBACK SOCIAL (baseadas em Jaques, Social RL):
 - A tarefa de review DEVE verificar: acentuação, estilo de escrita, economia de tokens.
 - Se o revisor encontrar problemas, o output deve incluir "needs_revision" + instruções.
 
-REGRAS DE PARALELIZAÇÃO DE REVIEW (sprint 2 + reforçada sprint 4 — 2026-04-07):
-- SEMPRE que a demanda envolver redação OU código gerado, OBRIGATORIAMENTE
-  decomponha o review final em 3 sub-reviews paralelos (mesma wave):
-  * review_acentuacao → classification (Groq llama, ~1s) — verifica APENAS
-    acentuação PT-BR completa, sem checar conteúdo. Output curto: lista
-    de palavras incorretas ou "ok".
-  * review_codigo → review (Claude, ~10s) — verifica APENAS o código
-    gerado: sintaxe, naming, edge cases. NÃO checa estilo de texto.
-  * review_estilo → analysis (Gemini, ~5s) — verifica tom editorial,
-    clareza, anti-padrões IA ("não se trata apenas de"), redundância.
-    NÃO checa código nem acentuação.
+REGRAS DE PARALELIZAÇÃO DE REVIEW (rebalanceada 2026-05-02):
+- SEMPRE que a demanda envolver redação OU código gerado, decomponha o
+  review final em 3 sub-reviews paralelos (mesma wave) — sem usar Opus:
+  * review_acentuacao → classification (Groq, ~1s) — verifica APENAS
+    acentuação PT-BR completa. Output curto: lista de palavras incorretas
+    ou "ok".
+  * review_codigo → code_review (Groq Heavy, ~3s) — verifica APENAS o
+    código gerado: sintaxe, naming, edge cases. Modelo grande na infra
+    Groq, raciocínio rápido. NÃO checa estilo de texto.
+  * review_estilo → analysis (Gemini 2.5 Pro, ~5s) — verifica tom
+    editorial, clareza, anti-padrões IA ("não se trata apenas de"),
+    redundância. NÃO checa código nem acentuação.
 - Os 3 sub-reviews NÃO dependem entre si — devem estar na MESMA wave para
   paralelizar wall clock.
 - Marque cada sub-review com complexity LOW (review_acentuacao,
-  review_estilo) ou MEDIUM (review_codigo) para acionar tier interno
-  Claude (Sonnet/Haiku) automaticamente.
-- NÃO crie um único review monolitico de complexity HIGH — isso desperdiça
-  Opus em verificações que podem ser distribuídas.
+  review_estilo) ou MEDIUM (review_codigo).
+- NÃO crie review monolítico Opus. Apenas se a demanda explicitar
+  "review crítico de arquitetura" use type="critical_review" (1 task
+  isolada, complexity HIGH).
 
 Tipos disponíveis: research, analysis, writing, copywriting, code, review, \
-seo, data_processing, fact_check, classification, translation, summarization.
+architecture, critical_review, code_review, seo, data_processing, fact_check, \
+classification, translation, summarization, extraction, decomposition.
 
 Regras gerais:
 1. ID único por tarefa (formato: t1, t2, t3...).
@@ -150,12 +165,18 @@ class Orchestrator:
         self.router = self._router  # alias for pipeline compatibility
         if force_all_llms:
             self._router.set_force_all_llms(True)
-        # Sprint 4 (2026-04-07): decompose() usa Sonnet 4.6 em vez de Opus.
-        # Sonnet e suficiente para decomposicao (a tarefa e estruturada,
-        # nao precisa raciocinio profundo). Economia de ~80% por chamada,
-        # multiplicada por TODA execucao do Orchestrator (1 decompose por run).
-        # Fallback para Opus se Sonnet nao estiver disponivel.
-        self._claude_cfg = LLM_CONFIGS.get("claude_sonnet") or LLM_CONFIGS["claude"]
+        # 2026-05-02: decompose() migra para Gemini 2.5 Pro.
+        # - 1M context: aceita demandas longas sem chunking.
+        # - ~5x mais barato em input ($1.25/MTok vs $3 do Sonnet).
+        # - Raciocinio estruturado (gera JSON) comparavel a Sonnet.
+        # Fallback para claude_sonnet -> claude_opus se Gemini indisponivel.
+        # Mantem o atributo `_claude_cfg` por compat (nome legado), mas a
+        # config agora aponta para o decompose-LLM canonico.
+        self._claude_cfg = (
+            LLM_CONFIGS.get("gemini")
+            or LLM_CONFIGS.get("claude_sonnet")
+            or LLM_CONFIGS["claude"]
+        )
         self._force = force  # bypass budget confirmation
         self._cache_dir = OUTPUT_DIR / ".cache"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -284,6 +305,27 @@ class Orchestrator:
 
         # Phase 2.5: Validate LLM balance — ensure all 4 are used
         self._validate_balance(plan.tasks)
+
+        # Phase 2.6 (2026-05-02): Pre-allocation com cap por provider.
+        # Roda apos decompose+complexity+dedup+code-first. Output e um mapa
+        # task_id -> llm_name que respeita PROVIDER_SHARE_CAP. Pipeline e
+        # router honram essas decisoes via Router._planned_assignments.
+        if self._smart_mode and isinstance(self._router, SmartRouter):
+            try:
+                pending_tasks = [
+                    t for t in plan.tasks if t.status != "completed"
+                ]
+                planned = self._router.rebalance_plan_assignments(
+                    pending_tasks, self._demand_tier
+                )
+                self._router.set_planned_assignments(planned)
+                # Zera contadores de sessao apos a simulacao do rebalance
+                # (smart_route foi chamado em loop e registrou assignments;
+                # a contagem real comeca quando o Pipeline executa).
+                for k in list(self._router._session_usage.keys()):
+                    self._router._session_usage[k] = 0
+            except Exception as exc:
+                logger.warning("rebalance_plan_assignments falhou: %s", exc)
 
         # Phase 3: Check cache for already-computed results (include code-first)
         cached_results: dict[str, TaskResult] = {tid: r for tid, r in code_resolved}

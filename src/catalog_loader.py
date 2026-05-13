@@ -167,8 +167,14 @@ def validate_catalog_vs_config(
     aliased = get_models_with_aliases(cat)
     errors: list[str] = []
 
+    # 2026-05-02 — aliases gerenciados externamente (env var override).
+    # Nao validados contra catalog. Documentados via comentario no YAML.
+    EXTERNALLY_MANAGED_ALIASES = frozenset({"groq_heavy"})
+
     cfgs = config_module.LLM_CONFIGS  # type: ignore[attr-defined]
     for alias, cfg in cfgs.items():
+        if alias in EXTERNALLY_MANAGED_ALIASES:
+            continue
         cat_entry = aliased.get(alias)
         if cat_entry is None:
             errors.append(f"alias '{alias}' presente em LLM_CONFIGS mas ausente do catalog")

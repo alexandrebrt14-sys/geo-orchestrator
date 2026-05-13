@@ -186,6 +186,60 @@ def compute_parallelism_efficiency(
     }
 
 
+def compute_provider_health(registry=None) -> tuple[dict, dict]:
+    """Sprint 8 (2026-05-02): saude por provider a partir do CircuitBreakerRegistry.
+
+    Le todos os breakers no formato 'provider:<nome>' e devolve:
+    - per_provider: {provider_name: {state, consecutive_failures, total_failures,
+      total_successes, health_score (0..1)}}
+    - summary: {min_health_score, providers_open, providers_half_open}
+
+    health_score = total_successes / (total_successes + total_failures), com
+    floor de 1.0 quando nao houve nenhuma chamada (assumindo saudavel).
+    """
+    if registry is None:
+        from .circuit_breaker import circuit_breaker_registry as registry
+
+    all_stats = registry.get_all_stats()
+    per_provider: dict[str, dict] = {}
+    open_count = 0
+    half_open_count = 0
+    min_score = 1.0
+
+    for breaker_name, stats in all_stats.items():
+        if not breaker_name.startswith("provider:"):
+            continue
+        provider = breaker_name[len("provider:"):]
+        successes = stats.get("total_successes", 0)
+        failures = stats.get("total_failures", 0)
+        total = successes + failures
+        score = 1.0 if total == 0 else round(successes / total, 4)
+        state = stats.get("state", "CLOSED")
+
+        per_provider[provider] = {
+            "state": state,
+            "consecutive_failures": stats.get("consecutive_failures", 0),
+            "total_failures": failures,
+            "total_successes": successes,
+            "health_score": score,
+        }
+
+        if state == "OPEN":
+            open_count += 1
+        elif state == "HALF_OPEN":
+            half_open_count += 1
+        if score < min_score:
+            min_score = score
+
+    summary = {
+        "min_health_score": round(min_score, 4),
+        "providers_open": open_count,
+        "providers_half_open": half_open_count,
+        "tracked_providers": len(per_provider),
+    }
+    return per_provider, summary
+
+
 def compute_fallback_save_rate(fallback_saves: int, total_runs: int) -> float:
     """Sprint 4 (2026-04-07): % de runs onde a fallback chain salvou >= 1 task.
 
@@ -232,6 +286,7 @@ def append_kpi_entry(
     par_eff, par_meta = compute_parallelism_efficiency(
         wave_timings, task_durations_ms, duration_ms
     )
+    provider_health_per, provider_health_summary = compute_provider_health()
 
     # Acumulado: le entries anteriores e soma fallback_saves
     prior = load_recent_entries(n=1000, history_path=path)
@@ -250,13 +305,17 @@ def append_kpi_entry(
         # Sprint 5 (2026-04-08): 2 KPIs novos
         "quality_judge_pass": qj_pass,  # 1.0 / 0.0 / None por run
         "parallelism_efficiency": par_eff,  # speedup vs sequencial (>=1.0)
+        # Sprint 8 (2026-05-02): saude por provider via circuit breaker
+        "provider_health": provider_health_per,
+        "min_provider_health_score": provider_health_summary["min_health_score"],
+        "providers_open": provider_health_summary["providers_open"],
         "real_cost_usd": round(real_cost, 4),
         "estimated_cost_usd": round(estimated_cost, 4),
         "duration_ms": duration_ms,
         "tasks_completed": tasks_completed,
         "tasks_failed": tasks_failed,
         "llm_usage": dict(llm_usage),
-        "_meta": {**health_meta, **tier_meta, **par_meta},
+        "_meta": {**health_meta, **tier_meta, **par_meta, **provider_health_summary},
     }
 
     with open(path, "a", encoding="utf-8") as f:

@@ -20,7 +20,14 @@ import time
 from enum import Enum
 from pathlib import Path
 
-from .config import LLM_CONFIGS, OUTPUT_DIR, TASK_TYPES, LLMConfig
+from .config import (
+    LLM_CONFIGS,
+    OUTPUT_DIR,
+    PROVIDER_SHARE_CAP,
+    TASK_TYPES,
+    LLMConfig,
+    llm_to_provider,
+)
 from .models import Task, TaskComplexity
 from .router import Router
 
@@ -450,6 +457,155 @@ class SmartRouter(Router):
                 # Use success as a rough proxy
                 total += 0.7 if e.get("success", False) else 0.3
         return total / len(entries)
+
+    # ------------------------------------------------------------------
+    # Plan-level pre-allocation com cap por provider (2026-05-02)
+    # ------------------------------------------------------------------
+
+    def rebalance_plan_assignments(
+        self,
+        tasks: list[Task],
+        tier: DemandTier,
+    ) -> dict[str, str]:
+        """Pre-aloca cada task do plano em um LLM respeitando PROVIDER_SHARE_CAP.
+
+        Diferente de smart_route() (decisao por task isolada), este metodo
+        olha o PLANO INTEIRO e redistribui antes da execucao quando uma
+        familia de provider (Anthropic em particular) excederia seu cap.
+
+        Estrategia:
+        1. Roteamento ingenuo: cada task -> primary do task type.
+        2. Mede share atual por provider.
+        3. Se algum provider excede seu cap, pega as tasks "mais
+           downgradaveis" daquele provider (low/medium complexity primeiro)
+           e move para o proximo LLM viavel da fallback chain que pertence
+           a um provider abaixo do cap.
+        4. Retorna mapa task_id -> llm_name (decisao final).
+
+        O Pipeline pode usar essas pre-decisoes em vez de chamar smart_route
+        no momento da execucao, garantindo o cap em nivel de plano.
+        """
+        if not tasks:
+            return {}
+
+        from .config import FALLBACK_CHAINS  # late import para evitar ciclo
+        plan_size = len(tasks)
+
+        # Passo 1: roteamento naive (primary do task type, com tier downgrade)
+        assignments: dict[str, str] = {}
+        for t in tasks:
+            chosen = self.smart_route(t, tier)
+            assignments[t.id] = chosen.name
+
+        # Passo 2: contagem por provider
+        def provider_counts() -> dict[str, int]:
+            counts: dict[str, int] = {}
+            for llm_name in assignments.values():
+                p = llm_to_provider(llm_name)
+                counts[p] = counts.get(p, 0) + 1
+            return counts
+
+        # Passo 3: redistribuir o que estourar
+        # Itera em ordem decrescente de excesso ate que todos estejam
+        # abaixo do cap (ou nao ha mais alternativa viavel).
+        max_iterations = plan_size * 2
+        for _ in range(max_iterations):
+            counts = provider_counts()
+            over: list[tuple[str, float]] = []  # (provider, excess_share)
+            for prov, count in counts.items():
+                cap = PROVIDER_SHARE_CAP.get(prov, 1.0)
+                share = count / plan_size
+                if share > cap:
+                    over.append((prov, share - cap))
+
+            if not over:
+                break  # tudo dentro do cap
+
+            # Escolhe o provider mais sobrecarregado
+            over.sort(key=lambda x: x[1], reverse=True)
+            target_provider, _excess = over[0]
+
+            # Encontra a task desse provider mais "downgradavel":
+            # prefere complexity LOW > MEDIUM > HIGH; dentro de empate,
+            # task com fallback chain mais longa (mais alternativas).
+            candidates: list[tuple[Task, str]] = []
+            for t in tasks:
+                llm_name = assignments[t.id]
+                if llm_to_provider(llm_name) != target_provider:
+                    continue
+                candidates.append((t, llm_name))
+
+            if not candidates:
+                break
+
+            def downgrade_priority(item: tuple[Task, str]) -> tuple[int, int]:
+                t, _ = item
+                comp = t.complexity.value if hasattr(t.complexity, "value") else str(t.complexity)
+                comp_rank = {"low": 0, "medium": 1, "high": 2}.get(comp, 1)
+                # Tasks de architecture/critical_review NAO devem ser
+                # movidas (Opus tem razao de existir nelas).
+                hard_pin = 100 if t.type in ("architecture", "critical_review") else 0
+                return (hard_pin + comp_rank, -len(FALLBACK_CHAINS.get(t.type, [])))
+
+            candidates.sort(key=downgrade_priority)
+
+            moved = False
+            for task, current_llm in candidates:
+                chain = FALLBACK_CHAINS.get(task.type, [])
+                # Inclui o primary canonico no inicio se nao estiver
+                routing = TASK_TYPES.get(task.type)
+                if routing and routing.primary not in chain:
+                    chain = [routing.primary] + list(chain)
+
+                for alt in chain:
+                    if alt == current_llm:
+                        continue
+                    if not self._is_usable(alt):
+                        continue
+                    alt_provider = llm_to_provider(alt)
+                    if alt_provider == target_provider:
+                        continue
+                    # Verifica se o provider alvo ainda tem espaco no cap
+                    alt_share = (counts.get(alt_provider, 0) + 1) / plan_size
+                    alt_cap = PROVIDER_SHARE_CAP.get(alt_provider, 1.0)
+                    if alt_share > alt_cap:
+                        continue
+                    # Move
+                    logger.info(
+                        "REBALANCE: task '%s' (%s) %s -> %s "
+                        "(cap %s atingido em %.0f%%)",
+                        task.id, task.type, current_llm, alt,
+                        target_provider,
+                        100 * counts.get(target_provider, 0) / plan_size,
+                    )
+                    assignments[task.id] = alt
+                    moved = True
+                    break
+                if moved:
+                    break
+
+            if not moved:
+                # Nao ha alternativa viavel — desiste para evitar loop
+                logger.warning(
+                    "REBALANCE: nao foi possivel respeitar cap de %s "
+                    "(%.0f%% > %.0f%%). Mantendo distribuicao.",
+                    target_provider,
+                    100 * counts.get(target_provider, 0) / plan_size,
+                    100 * PROVIDER_SHARE_CAP.get(target_provider, 1.0),
+                )
+                break
+
+        # Log final da distribuicao
+        final_counts = provider_counts()
+        logger.info(
+            "PLAN BALANCE (%d tasks): %s",
+            plan_size,
+            ", ".join(
+                f"{p}={c} ({100*c/plan_size:.0f}%)"
+                for p, c in sorted(final_counts.items(), key=lambda x: -x[1])
+            ),
+        )
+        return assignments
 
     # ------------------------------------------------------------------
     # Early Stop Check

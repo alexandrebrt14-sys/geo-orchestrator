@@ -19,6 +19,7 @@ from .config import (
     TASK_TYPES,
     LLMConfig,
 )
+from .circuit_breaker import circuit_breaker_registry
 from .models import Task, TaskComplexity
 
 logger = logging.getLogger(__name__)
@@ -68,9 +69,28 @@ class Router:
         self._stats: dict = self._load_stats()
         # Session-level load balancer: tracks tasks assigned per LLM this session
         self._session_usage: dict[str, int] = {name: 0 for name in LLM_CONFIGS}
+        # 2026-05-02: degradacao por provider em escala de sessao. Mapa
+        # provider_name -> unix_ts ate quando o provider esta marcado como
+        # degraded. Usado em conjunto com circuit_breaker_registry — o
+        # registry e cross-process via singleton, este mapa e local da run.
+        self._degraded_until: dict[str, float] = {}
         # Sprint 2: flag para forçar uso de todos os 5 LLMs canonicos antes de
         # cair em tier interno. Setado por cli.py run --force-5-llm.
         self._force_all_llms: bool = False
+        # 2026-05-02: pre-allocation gerada por SmartRouter.rebalance_plan_assignments.
+        # Mapa task_id -> llm_name. Quando preenchido, get_next_in_chain honra
+        # essa decisao na primeira tentativa antes de cair na chain padrao.
+        self._planned_assignments: dict[str, str] = {}
+
+    def set_planned_assignments(self, assignments: dict[str, str]) -> None:
+        """Registra o mapa task_id -> llm_name pre-calculado por
+        SmartRouter.rebalance_plan_assignments. Get_next_in_chain vai honrar
+        essa decisao na primeira tentativa de cada task."""
+        self._planned_assignments = dict(assignments or {})
+        logger.info(
+            "Router: planned_assignments registrado para %d tasks",
+            len(self._planned_assignments),
+        )
 
     def set_force_all_llms(self, enabled: bool) -> None:
         """Liga/desliga o modo force-5-llm: prioriza LLMs ainda nao usados.
@@ -500,7 +520,15 @@ class Router:
     # ------------------------------------------------------------------
 
     def _is_usable(self, llm_name: str) -> bool:
-        """Check if an LLM is available (has key) and not rate-limited."""
+        """Check if an LLM is available and not currently degraded.
+
+        Bloqueios em ordem (mais barato primeiro):
+        1. Configuracao ausente
+        2. API key ausente
+        3. Rate-limited explicito (legacy set)
+        4. Provider degraded por TTL local da sessao
+        5. Circuit breaker do provider em estado OPEN
+        """
         cfg = LLM_CONFIGS.get(llm_name)
         if cfg is None:
             return False
@@ -508,7 +536,48 @@ class Router:
             return False
         if llm_name in self._rate_limited:
             return False
+
+        provider_name = cfg.provider.value
+
+        # Degradation TTL local da sessao
+        until = self._degraded_until.get(provider_name)
+        if until is not None and time.time() < until:
+            return False
+
+        # Circuit breaker (cross-process via registry singleton)
+        breaker = circuit_breaker_registry.get_or_create(
+            name=f"provider:{provider_name}",
+            failure_threshold=3,
+            success_threshold=1,
+            timeout=90.0,
+        )
+        if breaker.state.value == "OPEN":
+            return False
+
         return True
+
+    def mark_provider_degraded(
+        self, provider_name: str, ttl_seconds: float = 120.0
+    ) -> None:
+        """Marca um provider como degraded por TTL na sessao atual.
+
+        Tasks subsequentes que dependeriam desse provider caem no fallback
+        sem pagar o custo de descobrir o outage. Util para sinais externos
+        (status page do Google, alerta manual, ou erros 5xx repetidos
+        observados pelo pipeline).
+        """
+        self._degraded_until[provider_name] = time.time() + max(0.0, ttl_seconds)
+        logger.warning(
+            "Provider '%s' marcado como DEGRADED por %.0fs (ate %.0f)",
+            provider_name, ttl_seconds, self._degraded_until[provider_name],
+        )
+
+    def clear_degradation(self, provider_name: str | None = None) -> None:
+        """Remove marcacao de degradation. Sem argumento, limpa todas."""
+        if provider_name is None:
+            self._degraded_until.clear()
+        else:
+            self._degraded_until.pop(provider_name, None)
 
     def route(self, task: Task) -> LLMConfig:
         """Return the best LLM config for the given task.
@@ -597,8 +666,17 @@ class Router:
         if not valid:
             return None
 
-        # Primeira tentativa: aplica cap, downgrade Claude por complexity, registra
+        # Primeira tentativa: honra pre-allocation se existir, senao aplica
+        # cap + downgrade classico
         if not tried:
+            preplanned = self._planned_assignments.get(task.id)
+            if preplanned and preplanned in valid:
+                logger.info(
+                    "PRE-ALLOCATED: task '%s' (%s) -> %s (do plan rebalance)",
+                    task.id, task.type, preplanned,
+                )
+                self.record_assignment(preplanned)
+                return LLM_CONFIGS[preplanned]
             chosen = self.apply_concentration_cap(valid[0], valid)
             chosen = self.downgrade_claude_by_complexity(chosen, task)
             # force_all override (sprint 2): se setado, prefere LLM ainda nao usado

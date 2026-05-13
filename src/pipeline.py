@@ -543,15 +543,28 @@ class Pipeline:
                 return False
 
         elif task.type == "code":
-            # Check balanced braces/brackets
+            # 2026-04-14: contagem bruta de chaves e muito agressiva —
+            # strings f"...{var}..." ou comentarios com { } quebravam o gate
+            # e forcavam retry de Opus indefinidamente (incidente run v3).
+            # Nova regra: so reprova se a DESPROPORCAO for grande (>20%),
+            # indicando truncamento real. Tambem exclui blocos string/docstring.
+            code_body = re.sub(r'(?s)(?:""".*?"""|\'\'\'.*?\'\'\'|"[^"\n]*"|\'[^\'\n]*\')', "", output)
             for open_c, close_c in [("{", "}"), ("[", "]"), ("(", ")")]:
-                if output.count(open_c) != output.count(close_c):
+                opens = code_body.count(open_c)
+                closes = code_body.count(close_c)
+                if opens == 0 and closes == 0:
+                    continue
+                total = max(opens, closes)
+                diff = abs(opens - closes)
+                # Reprova so se diferenca for >20% do total (truncamento real)
+                if diff / total > 0.20:
                     logger.warning(
-                        "Quality gate FAIL for '%s': unbalanced '%s'/'%s'.",
-                        task.id, open_c, close_c,
+                        "Quality gate FAIL for '%s': unbalanced '%s'/'%s' "
+                        "(opens=%d, closes=%d, diff=%.0f%%).",
+                        task.id, open_c, close_c, opens, closes, 100 * diff / total,
                     )
                     return False
-            # Check for TODO/FIXME markers
+            # TODO/FIXME continua bloqueando (intencional — forca output completo)
             if re.search(r"\b(TODO|FIXME)\b", output, re.IGNORECASE):
                 logger.warning(
                     "Quality gate FAIL for '%s': TODO/FIXME markers found.", task.id

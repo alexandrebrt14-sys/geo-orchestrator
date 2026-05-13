@@ -70,10 +70,28 @@ class TestRouterPrimaryWinsOverTier:
         chain = router.get_fallback_chain(task)
         assert chain[0] == "groq"
 
-    def test_code_high_complexity_starts_with_claude(self):
-        """Code task SHOULD go to claude — TASK_TYPES['code'].primary == claude."""
+    def test_code_high_complexity_starts_with_gemini(self):
+        """Code task SHOULD go to gemini (rebalanceamento 2026-05-02 —
+        Opus reservado a architecture/critical_review). Gemini 2.5 Pro
+        e primary para code padrao."""
         router = Router()
         task = _make_task("t4", "code", "high")
+        chain = router.get_fallback_chain(task)
+        assert chain[0] == "gemini"
+
+    def test_architecture_starts_with_claude(self):
+        """Architecture task SHOULD go to claude (Opus) — caso unico onde
+        Opus continua primary apos rebalanceamento 2026-05-02."""
+        router = Router()
+        task = _make_task("t4a", "architecture", "high")
+        chain = router.get_fallback_chain(task)
+        assert chain[0] == "claude"
+
+    def test_critical_review_starts_with_claude(self):
+        """Critical review SHOULD go to claude (Opus) — caso unico onde
+        Opus continua primary apos rebalanceamento 2026-05-02."""
+        router = Router()
+        task = _make_task("t4b", "critical_review", "high")
         chain = router.get_fallback_chain(task)
         assert chain[0] == "claude"
 
@@ -266,14 +284,37 @@ class TestTaskTypesCanonical:
     def test_classification_routes_to_groq(self):
         assert TASK_TYPES["classification"].primary == "groq"
 
-    def test_analysis_routes_to_gemini(self):
-        assert TASK_TYPES["analysis"].primary == "gemini"
+    def test_analysis_routes_to_gemini_flash(self):
+        """2026-05-02 v3: analysis primary migrou de gemini (Pro) para
+        gemini_flash. Pro entrou em outage 503 sustentado (60% taxa de
+        falha em probe direto); Flash mantem 1M ctx, ~5x mais barato e
+        atende analise/bulk com qualidade equivalente para tier medium."""
+        assert TASK_TYPES["analysis"].primary == "gemini_flash"
 
-    def test_code_routes_to_claude(self):
-        assert TASK_TYPES["code"].primary == "claude"
+    def test_code_routes_to_gemini(self):
+        """2026-05-02: code primary virou gemini (Gemini 2.5 Pro,
+        1M context, ~1/15 do custo Opus). Opus so para architecture."""
+        assert TASK_TYPES["code"].primary == "gemini"
 
-    def test_review_routes_to_claude(self):
-        assert TASK_TYPES["review"].primary == "claude"
+    def test_review_routes_to_groq_heavy(self):
+        """2026-05-02 v3: review primary continua groq_heavy. Fallback
+        migrou de gemini (Pro) para gemini_flash apos diagnostico de
+        503 sustentado em Pro (saturacao do tier compartilhado Google)."""
+        assert TASK_TYPES["review"].primary == "groq_heavy"
+        assert TASK_TYPES["review"].fallback == "gemini_flash"
+
+    def test_decomposition_routes_to_claude_sonnet(self):
+        """2026-05-02 v2: decomposition voltou para claude_sonnet (wave 1
+        critica nao pode depender de provider unstable; Sonnet e estavel
+        e ~5x mais barato que Opus)."""
+        assert TASK_TYPES["decomposition"].primary == "claude_sonnet"
+        assert TASK_TYPES["decomposition"].fallback == "gemini"
+
+    def test_architecture_routes_to_claude(self):
+        assert TASK_TYPES["architecture"].primary == "claude"
+
+    def test_critical_review_routes_to_claude(self):
+        assert TASK_TYPES["critical_review"].primary == "claude"
 
 
 # ─── Schema do execution_*.json ─────────────────────────────────────

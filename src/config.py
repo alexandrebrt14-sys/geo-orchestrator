@@ -76,7 +76,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         strengths=["architecture", "complex_code", "critical_review", "reasoning"],
         cost_per_1k_input=0.015,
         cost_per_1k_output=0.075,
-        max_tokens=8192,
+        max_tokens=32000,
         role="Arquiteto e revisor principal. Raciocinio complexo, codigo critico e decomposicao de demandas.",
     ),
     "gpt4o": LLMConfig(
@@ -87,19 +87,41 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         strengths=["long_form_writing", "copywriting", "seo_content", "creative_text", "translation"],
         cost_per_1k_input=0.0025,
         cost_per_1k_output=0.010,
-        max_tokens=8192,
+        max_tokens=16384,
         role="Redator e copywriter. Conteudo longo, SEO, traducao e texto criativo.",
     ),
     "gemini": LLMConfig(
         name="gemini",
         provider=Provider.GOOGLE,
-        model="gemini-2.5-pro",
+        # 2026-05-02 v3 — modelo configuravel via env. gemini-2.5-pro continua
+        # default (pesado, raciocinio profundo) mas pode ser baixado para flash
+        # via GEMINI_MODEL=gemini-2.5-flash em janelas de outage 503 sustentado
+        # do tier Pro (probe direto: 60% taxa de 503 em 2026-05-02).
+        model=os.environ.get("GEMINI_MODEL", "gemini-2.5-pro"),
         api_key_env="GOOGLE_AI_API_KEY",
         strengths=["deep_analysis", "bulk_processing", "summarization", "classification", "reasoning"],
         cost_per_1k_input=0.00125,
         cost_per_1k_output=0.005,
-        max_tokens=16384,
+        max_tokens=65536,
         role="Analista profundo. Processamento em massa, resumos, classificacao e raciocinio avancado.",
+    ),
+    # 2026-05-02 v3 — Tier Flash do Google. Adicionado depois do diagnostico
+    # de 503 sustentado em gemini-2.5-pro (saturacao compartilhada do tier
+    # standard do Google AI). Flash mantem 1M ctx, latencia ~3x menor e custo
+    # ~5x menor que Pro. Usado como primary em tasks medium (analysis, data
+    # processing, fact_check fallback, classification, summarization,
+    # extraction). Pro continua reservado para code/architecture/decomposition
+    # onde a inteligencia adicional vale o premium.
+    "gemini_flash": LLMConfig(
+        name="gemini_flash",
+        provider=Provider.GOOGLE,
+        model=os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash"),
+        api_key_env="GOOGLE_AI_API_KEY",
+        strengths=["fast_inference", "bulk_processing", "summarization", "classification", "data_processing"],
+        cost_per_1k_input=0.00030,
+        cost_per_1k_output=0.0025,
+        max_tokens=65536,
+        role="Gemini Flash — analise rapida, bulk processing, classificacao e resumos. ~5x mais barato que Pro com 1M ctx mantido. Tier de protecao quando Pro entra em outage 503 sustentado.",
     ),
     "perplexity": LLMConfig(
         name="perplexity",
@@ -118,13 +140,29 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
     "groq": LLMConfig(
         name="groq",
         provider=Provider.GROQ,
-        model="llama-3.3-70b-versatile",
+        model=os.environ.get("GROQ_DEFAULT_MODEL", "llama-3.3-70b-versatile"),
         api_key_env="GROQ_API_KEY",
         strengths=["ultra_fast_inference", "code_review", "quick_analysis", "translation", "summarization"],
         cost_per_1k_input=0.00059,
         cost_per_1k_output=0.00079,
-        max_tokens=8192,
+        max_tokens=32768,
         role="Velocista. Inferencia ultra-rapida (~10x mais rapido que outros). Ideal para tarefas que precisam de velocidade: triagem, classificacao, traducao, resumos rapidos, code review leve.",
+    ),
+    # 2026-05-02 — Tier de raciocinio Groq (modelo grande, ainda ultra-rapido).
+    # Override por env var GROQ_HEAVY_MODEL. Default aponta para llama-3.3-70b
+    # como compatibilidade segura; trocar para openai/gpt-oss-120b ou
+    # qwen/qwen3-32b quando o usuario quiser ativar potencia maxima Groq.
+    # Pricing aproximado mantem a faixa Groq (ainda ~10x mais barato que Opus).
+    "groq_heavy": LLMConfig(
+        name="groq_heavy",
+        provider=Provider.GROQ,
+        model=os.environ.get("GROQ_HEAVY_MODEL", "llama-3.3-70b-versatile"),
+        api_key_env="GROQ_API_KEY",
+        strengths=["fast_reasoning", "code_review_heavy", "deep_classification", "structured_extraction", "decomposition"],
+        cost_per_1k_input=0.00150,
+        cost_per_1k_output=0.00200,
+        max_tokens=32768,
+        role="Groq Heavy — modelo de raciocinio ainda na infra Groq. Para sub-reviews codigo, decomposicao auxiliar, classificacao profunda e extracao estruturada. Mantem a velocidade Groq (~5-10x mais rapido que Opus) com qualidade de raciocinio compativel para tarefas medium-high.",
     ),
     # Tier interno Claude (adicionado 2026-04-07 sprint 2):
     # downgrade automatico via Router._downgrade_claude_by_complexity.
@@ -138,7 +176,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         strengths=["balanced_reasoning", "code_review", "writing_long_form", "moderate_architecture"],
         cost_per_1k_input=0.003,
         cost_per_1k_output=0.015,
-        max_tokens=8192,
+        max_tokens=64000,
         role="Sonnet 4.6 — tier intermediario da familia Claude. 5x mais barato que Opus, mantendo 90%+ da qualidade para tarefas medium-complexity.",
     ),
     "claude_haiku": LLMConfig(
@@ -149,7 +187,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         strengths=["fast_inference", "classification", "summarization", "simple_code"],
         cost_per_1k_input=0.0008,
         cost_per_1k_output=0.004,
-        max_tokens=8192,
+        max_tokens=64000,
         role="Haiku 4.5 — tier mais barato da familia Claude. ~19x mais barato que Opus, ideal para low-complexity (triagem, classificacao, summarization).",
     ),
 }
@@ -192,19 +230,33 @@ class TaskRouting:
     fallback: str
 
 
+# 2026-05-02 v3 — SPLIT GEMINI PRO/FLASH POS-DIAGNOSTICO 503 SUSTENTADO.
+# Probe direto na API Google retornou 60% de 503 em gemini-2.5-pro (saturacao
+# compartilhada do tier standard). gemini-2.5-flash 100% saudavel mesma chave.
+# Diretriz: Pro continua em tasks que precisam de raciocinio premium (code,
+# architecture/critical_review fallback, decomposition fallback, code_review,
+# writing/copywriting fallback, research fallback). Flash entra em tasks
+# medium-economy (analysis, review fallback, data_processing, fact_check
+# fallback, classification fallback, summarization fallback, extraction
+# fallback). Mantem regra dura cross-provider top-2.
 TASK_TYPES: dict[str, TaskRouting] = {
-    "research":        TaskRouting(primary="perplexity", fallback="gemini"),
-    "analysis":        TaskRouting(primary="gemini",     fallback="groq"),
-    "writing":         TaskRouting(primary="gpt4o",      fallback="claude"),
-    "copywriting":     TaskRouting(primary="gpt4o",      fallback="claude"),
-    "code":            TaskRouting(primary="claude",      fallback="gpt4o"),
-    "review":          TaskRouting(primary="claude",      fallback="groq"),
-    "seo":             TaskRouting(primary="gpt4o",       fallback="perplexity"),
-    "data_processing": TaskRouting(primary="gemini",      fallback="groq"),
-    "fact_check":      TaskRouting(primary="perplexity",  fallback="gemini"),
-    "classification":  TaskRouting(primary="groq",        fallback="gemini"),
-    "translation":     TaskRouting(primary="groq",        fallback="gpt4o"),
-    "summarization":   TaskRouting(primary="groq",        fallback="gemini"),
+    "research":         TaskRouting(primary="perplexity",    fallback="gemini"),
+    "analysis":         TaskRouting(primary="gemini_flash",  fallback="groq_heavy"),
+    "writing":          TaskRouting(primary="gpt4o",         fallback="gemini"),
+    "copywriting":      TaskRouting(primary="gpt4o",         fallback="claude_sonnet"),
+    "code":             TaskRouting(primary="gemini",        fallback="claude_sonnet"),
+    "review":           TaskRouting(primary="groq_heavy",    fallback="gemini_flash"),
+    "architecture":     TaskRouting(primary="claude",        fallback="gemini"),
+    "critical_review":  TaskRouting(primary="claude",        fallback="gemini"),
+    "decomposition":    TaskRouting(primary="claude_sonnet", fallback="gemini"),
+    "code_review":      TaskRouting(primary="groq_heavy",    fallback="claude_sonnet"),
+    "seo":              TaskRouting(primary="gpt4o",         fallback="perplexity"),
+    "data_processing":  TaskRouting(primary="gemini_flash",  fallback="groq"),
+    "fact_check":       TaskRouting(primary="perplexity",    fallback="gemini_flash"),
+    "classification":   TaskRouting(primary="groq",          fallback="gemini_flash"),
+    "translation":      TaskRouting(primary="groq",          fallback="gpt4o"),
+    "summarization":    TaskRouting(primary="groq",          fallback="gemini_flash"),
+    "extraction":       TaskRouting(primary="groq_heavy",    fallback="gemini_flash"),
 }
 
 
@@ -214,11 +266,11 @@ TASK_TYPES: dict[str, TaskRouting] = {
 
 MODEL_TIERS: dict[str, list[str]] = {
     # Tier 1 (cheap, fast): classification, summarization, simple analysis
-    "low": ["gemini", "claude"],       # Gemini Flash is cheapest; Claude Haiku would go here too
-    # Tier 2 (balanced): writing, research
-    "medium": ["gpt4o", "perplexity"],
-    # Tier 3 (premium): complex code, architecture, critical review
-    "high": ["claude", "gpt4o"],
+    "low": ["groq", "claude_haiku", "gemini_flash"],
+    # Tier 2 (balanced): writing, code, review, deep analysis
+    "medium": ["gemini_flash", "groq_heavy", "gpt4o", "claude_sonnet"],
+    # Tier 3 (premium): architecture e critical review apenas
+    "high": ["claude", "gemini", "gpt4o"],
 }
 
 
@@ -228,22 +280,28 @@ MODEL_TIERS: dict[str, list[str]] = {
 
 # 2026-04-14: cobertura 5/5 — cada chain inclui TODOS os 5 providers canonicos.
 # Garante que se 4 falharem, o 5o ainda executa (graceful degradation total).
-# Ordem: primary -> fallback especialista -> ultimo recurso (groq geralmente
-# no fim por ser modelo menor, exceto em classification/translation onde e
-# primario).
+# 2026-05-02 v2 — REGRA DURA: os 2 primeiros slots de cada chain sao de
+# providers DIFERENTES (cross-provider diversity). Quando o primary cai,
+# o 1o fallback nao depende da mesma infra. Reduz o "single provider, single
+# point of failure" do rebalance original.
 FALLBACK_CHAINS: dict[str, list[str]] = {
-    "research":        ["perplexity", "gpt4o", "gemini", "claude", "groq"],
-    "writing":         ["gpt4o", "claude", "perplexity", "gemini", "groq"],
-    "copywriting":     ["gpt4o", "claude", "perplexity", "gemini", "groq"],
-    "code":            ["claude", "gpt4o", "gemini", "perplexity", "groq"],
-    "review":          ["claude", "gpt4o", "gemini", "perplexity", "groq"],
-    "analysis":        ["gemini", "claude", "gpt4o", "perplexity", "groq"],
-    "seo":             ["gpt4o", "perplexity", "claude", "gemini", "groq"],
-    "data_processing": ["gemini", "gpt4o", "claude", "perplexity", "groq"],
-    "fact_check":      ["perplexity", "gemini", "claude", "gpt4o", "groq"],
-    "classification":  ["groq", "gemini", "claude", "gpt4o", "perplexity"],
-    "translation":     ["groq", "gpt4o", "gemini", "claude", "perplexity"],
-    "summarization":   ["groq", "gemini", "gpt4o", "claude", "perplexity"],
+    "research":         ["perplexity",    "gemini",        "gpt4o",         "claude_sonnet", "groq_heavy",   "groq"],
+    "writing":          ["gpt4o",         "claude_sonnet", "gemini",        "perplexity",    "groq_heavy",   "groq"],
+    "copywriting":      ["gpt4o",         "claude_sonnet", "gemini",        "perplexity",    "groq_heavy",   "groq"],
+    "code":             ["gemini",        "claude_sonnet", "groq_heavy",    "gpt4o",         "claude",       "groq"],
+    "review":           ["groq_heavy",    "gemini_flash",  "claude_sonnet", "gpt4o",         "claude",       "groq"],
+    "architecture":     ["claude",        "gemini",        "gpt4o",         "claude_sonnet", "groq_heavy",   "groq"],
+    "critical_review":  ["claude",        "gpt4o",         "gemini",        "claude_sonnet", "groq_heavy",   "groq"],
+    "decomposition":    ["claude_sonnet", "gemini",        "gpt4o",         "groq_heavy",    "claude",       "groq"],
+    "code_review":      ["groq_heavy",    "claude_sonnet", "gemini",        "gpt4o",         "claude",       "groq"],
+    "analysis":         ["gemini_flash",  "groq_heavy",    "gpt4o",         "claude_sonnet", "perplexity",   "groq"],
+    "seo":              ["gpt4o",         "perplexity",    "gemini",        "claude_sonnet", "groq_heavy",   "groq"],
+    "data_processing":  ["gemini_flash",  "groq_heavy",    "gpt4o",         "claude_sonnet", "perplexity",   "groq"],
+    "fact_check":       ["perplexity",    "gemini_flash",  "gpt4o",         "claude_sonnet", "groq_heavy",   "groq"],
+    "classification":   ["groq",          "gemini_flash",  "claude_haiku",  "groq_heavy",    "gpt4o",        "perplexity"],
+    "translation":      ["groq",          "gpt4o",         "gemini_flash",  "claude_haiku",  "groq_heavy",   "perplexity"],
+    "summarization":    ["groq",          "gemini_flash",  "claude_haiku",  "groq_heavy",    "gpt4o",        "perplexity"],
+    "extraction":       ["groq_heavy",    "gemini_flash",  "claude_sonnet", "gpt4o",         "groq",         "claude_haiku"],
 }
 
 
@@ -259,12 +317,16 @@ TIMEOUT_BY_TASK_TYPE: dict[str, float] = {
     "research":        240.0,  # sonar-deep-research pode levar 2-4min por query profunda
     "writing":        180.0,   # ebook/curso: +50% para long-form denso
     "copywriting":    180.0,
-    "code":           420.0,   # +40% para Opus com raciocinio arquitetural
-    "architecture":   420.0,
-    "code_generation":420.0,
-    "review":         180.0,
+    "code":           300.0,   # Gemini 2.5 Pro como primary; Opus so como fallback critico
+    "architecture":   420.0,   # Opus com raciocinio arquitetural
+    "code_generation":300.0,
+    "code_review":    120.0,   # Groq Heavy ultra-rapido para code review
+    "review":         180.0,   # Gemini 2.5 Pro como primary
+    "critical_review":300.0,   # Opus reservado para review critico
+    "decomposition":  120.0,   # Gemini decomposition (substitui Sonnet)
+    "extraction":      90.0,   # Groq Heavy para extracao estruturada
     "seo":            120.0,
-    "analysis":       120.0,   # Gemini 2.5 Pro thinking mode consome tempo
+    "analysis":       150.0,   # Gemini 2.5 Pro thinking mode + groq_heavy fallback
     "classification":  45.0,
     "summarization":   45.0,
     "data_processing": 90.0,
@@ -318,8 +380,10 @@ AVG_COST_PER_CALL: dict[str, float] = {
     "claude_haiku":  0.005,
     "gpt4o":         0.015,
     "gemini":        0.005,
+    "gemini_flash":  0.001,   # ~5x mais barato que Pro (Flash 2.5: $0.30/$2.50 por M tok)
     "perplexity":    0.008,
     "groq":          0.001,
+    "groq_heavy":    0.0025,
 }
 
 
@@ -332,13 +396,48 @@ AVG_COST_PER_CALL: dict[str, float] = {
 # 3-5 demandas profundas/dia sem bloquear top-tier. Cap 80% continua protegendo
 # contra concentracao indevida; os limites abaixo sao o teto absoluto diario.
 FINOPS_DAILY_LIMITS: dict[str, float] = {
-    "anthropic":  float(os.environ.get("FINOPS_LIMIT_ANTHROPIC", "10.00")),  # 5x — familia Claude inteira (Opus+Sonnet+Haiku)
-    "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "8.00")),       # 4x — GPT-4o writing intensivo
-    "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "5.00")),       # 5x — Gemini 2.5 Pro com thinking mode
-    "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "5.00")),   # 5x — sonar-deep-research + search fees ($5/1000 searches)
-    "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "5.00")),         # 2.5x — volume alto em classification/summarization
+    # 2026-05-09 — modo POTENCIA MAXIMA por ordem direta CEO Brasil GEO.
+    # Caps elevados ~10x para suportar bateria de 5 waves com pesquisa profunda
+    # (sonar-deep-research + Opus 32k + Gemini Pro 65k tokens) sem bloqueio.
+    "anthropic":  float(os.environ.get("FINOPS_LIMIT_ANTHROPIC", "100.00")),
+    "openai":     float(os.environ.get("FINOPS_LIMIT_OPENAI", "50.00")),
+    "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "50.00")),
+    "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "30.00")),
+    "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "30.00")),
 }
 
 # Global daily budget (sum of all providers, with safety margin).
-# 2026-04-14: $8 -> $30 para acompanhar os limites por provider.
-FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "30.00"))
+# 2026-05-09: $30 -> $250 (modo potencia maxima).
+FINOPS_DAILY_GLOBAL: float = float(os.environ.get("FINOPS_LIMIT_GLOBAL", "250.00"))
+
+
+# ---------------------------------------------------------------------------
+# Concentration caps por PROVIDER (2026-05-02)
+# ---------------------------------------------------------------------------
+#
+# Antes: cap era por nome de LLM (claude, claude_sonnet, claude_haiku
+# contavam separadamente, deixando Anthropic chegar a 90% facil).
+# Agora: cap por provider familia. Anthropic (Opus+Sonnet+Haiku somados)
+# nao pode passar de 30% das tasks por run; Gemini e Groq ganham folga
+# para serem protagonistas em demandas tipicas.
+# 2026-05-02 v2: caps re-balanceados para nao deixar nenhum provider unico
+# dominar. google 0.55 -> 0.45 (estava amplo demais e amplificou o blast
+# radius do outage); anthropic 0.30 -> 0.40 (Sonnet/Haiku precisam de
+# espaco para cobrir wave 1 + reviews); openai 0.45 (mantido); perplexity
+# 0.50 (mantido); groq 0.65 (mantido — ela e a vala comum cheap-and-fast).
+PROVIDER_SHARE_CAP: dict[str, float] = {
+    "anthropic":  float(os.environ.get("CAP_ANTHROPIC", "0.40")),
+    "openai":     float(os.environ.get("CAP_OPENAI", "0.45")),
+    "google":     float(os.environ.get("CAP_GOOGLE", "0.45")),
+    "perplexity": float(os.environ.get("CAP_PERPLEXITY", "0.50")),
+    "groq":       float(os.environ.get("CAP_GROQ", "0.65")),
+}
+
+# Mapa LLM-name -> provider (resolvido a partir de LLM_CONFIGS).
+def llm_to_provider(llm_name: str) -> str:
+    """Retorna o provider canonico (anthropic/openai/google/perplexity/groq)
+    de um alias de LLM (claude, claude_sonnet, gemini, groq_heavy, etc)."""
+    cfg = LLM_CONFIGS.get(llm_name)
+    if cfg is None:
+        return ""
+    return cfg.provider.value

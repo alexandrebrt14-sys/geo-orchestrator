@@ -15,7 +15,7 @@ providers:
         display: "Claude Opus 4.6"
         input_cost_per_mtok: 15.00
         output_cost_per_mtok: 75.00
-        max_tokens: 8192
+        max_tokens: 32000
         rpm: 60
         capabilities: [architecture, code_generation, review, deep_reasoning]
         tier: premium
@@ -26,7 +26,7 @@ providers:
         display: "Claude Sonnet 4.6"
         input_cost_per_mtok: 3.00
         output_cost_per_mtok: 15.00
-        max_tokens: 8192
+        max_tokens: 64000
         rpm: 100
         capabilities: [writing, analysis, classification, code_generation, review]
         tier: standard
@@ -37,7 +37,7 @@ providers:
         display: "Claude Haiku 4.5"
         input_cost_per_mtok: 0.80
         output_cost_per_mtok: 4.00
-        max_tokens: 8192
+        max_tokens: 64000
         rpm: 200
         capabilities: [classification, summarization, translation, simple_code]
         tier: economy
@@ -53,7 +53,7 @@ providers:
         display: "GPT-4o"
         input_cost_per_mtok: 2.50
         output_cost_per_mtok: 10.00
-        max_tokens: 8192
+        max_tokens: 16384
         rpm: 60
         capabilities: [writing, seo, copywriting, analysis, translation]
         tier: standard
@@ -68,13 +68,24 @@ providers:
         display: "Gemini 2.5 Pro"
         input_cost_per_mtok: 1.25
         output_cost_per_mtok: 5.00
-        max_tokens: 16384
+        max_tokens: 65536
         rpm: 30
-        capabilities: [deep_analysis, data_processing, classification, summarization, reasoning]
+        capabilities: [deep_analysis, code_generation, data_processing, reasoning]
         tier: standard
         config_alias: gemini
         status: active
-        notes: "Sempre Pro (nunca Flash) — feedback 2026-03-21"
+        notes: "Pro reservado para tasks que precisam de raciocinio profundo (code, architecture, decomposition). Para tasks medium/economy usar gemini-2.5-flash. Pro tem outage 503 sustentado em 2026-05-02 (saturacao do tier compartilhado)."
+      gemini-2.5-flash:
+        display: "Gemini 2.5 Flash"
+        input_cost_per_mtok: 0.30
+        output_cost_per_mtok: 2.50
+        max_tokens: 65536
+        rpm: 60
+        capabilities: [fast_inference, classification, summarization, data_processing, bulk_processing]
+        tier: economy
+        config_alias: gemini_flash
+        status: active
+        notes: "Adicionado 2026-05-02 v3. Mantem 1M ctx; ~5x mais barato que Pro; latencia ~3x menor. Tier de protecao quando Pro entra em outage."
 
   perplexity:
     display_name: "Perplexity"
@@ -102,12 +113,19 @@ providers:
         display: "Llama 3.3 70B"
         input_cost_per_mtok: 0.59
         output_cost_per_mtok: 0.79
-        max_tokens: 8192
+        max_tokens: 32768
         rpm: 300
         capabilities: [classification, summarization, translation, fast_inference]
         tier: economy
         config_alias: groq
         status: active
+      # 2026-05-02 — alias groq_heavy NAO esta no catalog YAML por design.
+      # O modelo real e controlado via env GROQ_HEAVY_MODEL e o LLMConfig
+      # vem do dict hardcoded em src/config.py (caminho de fallback). Isso
+      # permite trocar o modelo (ex: openai/gpt-oss-120b, qwen/qwen3-32b,
+      # llama-4-scout-17b) sem editar o YAML. Default em config.py:
+      # llama-3.3-70b-versatile (seguro). Producao recomendada:
+      # openai/gpt-oss-120b (120B, 131K ctx, 56 reasoning tokens).
 
 # Tier interno por familia (Sprint 3 — runtime). Acionado automaticamente
 # por SmartRouter / Router._apply_claude_tier baseado em task.complexity.
@@ -120,32 +138,54 @@ tier_routing:
     "5": claude-opus-4-6
 
 # Task routing — capabilities required per task type
+# 2026-05-02 — REBALANCEAMENTO: Gemini e Groq como protagonistas.
+# Anthropic so e preferred em "architecture" e "critical_review".
 task_routing:
   research:
     required_capabilities: [research, live_search]
     preferred_provider: perplexity
-    fallback: [openai, anthropic]
+    fallback: [google, openai, groq]
   writing:
     required_capabilities: [writing, seo]
     preferred_provider: openai
-    fallback: [anthropic]
+    fallback: [google, anthropic]
   analysis:
     required_capabilities: [analysis, data_processing]
     preferred_provider: google
-    fallback: [groq, openai]
+    model_override: gemini-2.5-flash
+    fallback: [groq, openai, anthropic]
   architecture:
     required_capabilities: [architecture, deep_reasoning]
     preferred_provider: anthropic
     model_override: claude-opus-4-6
-    fallback: [openai]
-  code_generation:
-    required_capabilities: [code_generation]
-    preferred_provider: anthropic
-    fallback: [openai]
-  review:
+    fallback: [google, openai]
+  critical_review:
     required_capabilities: [review, deep_reasoning]
     preferred_provider: anthropic
-    fallback: [openai]
+    model_override: claude-opus-4-6
+    fallback: [google, openai]
+  code:
+    required_capabilities: [code_generation]
+    preferred_provider: google
+    model_override: gemini-2.5-pro
+    fallback: [groq, anthropic, openai]
+  code_generation:
+    required_capabilities: [code_generation]
+    preferred_provider: google
+    fallback: [groq, anthropic, openai]
+  code_review:
+    required_capabilities: [code_review_heavy]
+    preferred_provider: groq
+    model_override: groq-heavy
+    fallback: [google, anthropic]
+  review:
+    required_capabilities: [review, deep_reasoning]
+    preferred_provider: google
+    fallback: [groq, anthropic, openai]
+  decomposition:
+    required_capabilities: [decomposition]
+    preferred_provider: google
+    fallback: [groq, anthropic]
   classification:
     required_capabilities: [classification]
     preferred_provider: groq
@@ -157,38 +197,49 @@ task_routing:
   translation:
     required_capabilities: [translation]
     preferred_provider: groq
-    fallback: [openai]
+    fallback: [openai, google]
+  extraction:
+    required_capabilities: [structured_extraction]
+    preferred_provider: groq
+    model_override: groq-heavy
+    fallback: [google, openai]
   data_processing:
     required_capabilities: [data_processing]
     preferred_provider: google
+    model_override: gemini-2.5-flash
     fallback: [groq]
   fact_check:
     required_capabilities: [fact_check, live_search]
     preferred_provider: perplexity
-    fallback: [google]
+    fallback: [google, anthropic]
 
-# Budget limits — alinhados com src/config.FINOPS_DAILY_LIMITS (sprint 5)
+# Budget limits — alinhados com src/config.FINOPS_DAILY_LIMITS
+# 2026-05-09 — modo POTENCIA MAXIMA: caps reset por ordem direta do CEO Brasil GEO
+# para suportar bateria de 5 waves (12+ aulas T1-T4 com pesquisa profunda).
 budgets:
   daily_limits:
-    anthropic: 2.00
-    openai: 2.00
-    google: 1.00
-    perplexity: 1.00
-    groq: 2.00
-    global: 8.00
-  per_run_max: 5.00
-  alert_threshold: 0.80  # Alert at 80% of daily limit
+    anthropic: 100.00
+    openai: 50.00
+    google: 50.00
+    perplexity: 30.00
+    groq: 30.00
+    global: 250.00
+  per_run_max: 50.00
+  alert_threshold: 0.80
   block_threshold: 0.95
 
-# Provider concentration cap (sprint 2)
+# Provider concentration cap — alinhado com src/config.PROVIDER_SHARE_CAP
+# (rebalanceamento 2026-05-02). Anthropic apertado para 30% para forcar
+# Gemini/Groq como protagonistas em demandas tipicas. Opus volta a ser
+# usado apenas onde realmente precisa (architecture, critical_review).
 caps:
-  default_share: 0.80
+  default_share: 0.50
   per_provider:
-    anthropic: 0.80
-    openai: 0.80
-    google: 0.80
-    perplexity: 0.80
-    groq: 0.80
+    anthropic: 0.30
+    openai: 0.45
+    google: 0.55
+    perplexity: 0.50
+    groq: 0.65
 
 # Operational modes
 modes:
