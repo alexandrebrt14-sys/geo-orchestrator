@@ -1,0 +1,15 @@
+                            geo-orchestrator doctor                            
+┌─────────────────────┬────────┬──────────────────────────────────────────────┐
+│ Check               │ Status │ Detalhe                                      │
+├─────────────────────┼────────┼──────────────────────────────────────────────┤
+│ api_keys            │ OK     │ 9 LLMs configurados                          │
+│ catalog_consistency │ OK     │ catalog YAML alinhado com LLM_CONFIGS        │
+│ finops_daily        │ OK     │ max 6% (anthropic)                           │
+│ kpi_history         │ OK     │ 5 entries recentes, ultima:                  │
+│                     │        │ 2026-05-13T22:18:17                          │
+│ cost_calibration    │ OK     │ 6 LLMs, recalibrado ha 1d                    │
+│ drift_detector      │ OK     │ cost_estimate_accuracy dentro da banda       │
+│                     │        │ 0.7-1.5                                      │
+└─────────────────────┴────────┴──────────────────────────────────────────────┘
+
+Status geral: OK

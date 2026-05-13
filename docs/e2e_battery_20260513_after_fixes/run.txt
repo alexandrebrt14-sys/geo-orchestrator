@@ -1,0 +1,109 @@
+┌─────────────────────────── geo-orchestrator v2.0 ───────────────────────────┐
+│ Demanda: Liste 4 KPIs canônicos de GEO em tabela markdown com 1 frase de    │
+│ definição cada.                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                          Banca de Modelos (canonica)                          
+ LLM            Modelo                Provider    Papel                 Status 
+ claude         claude-opus-4-6       anthropic   Arquiteto e revisor   ativo  
+                                                  principal.                   
+                                                  Raciocinio complexo,         
+                                                  codigo c...                  
+ gpt4o          gpt-4o                openai      Redator e             ativo  
+                                                  copywriter. Conteudo         
+                                                  longo, SEO, traducao         
+                                                  e texto ...                  
+ gemini         gemini-2.5-pro        google      Analista profundo.    ativo  
+                                                  Processamento em             
+                                                  massa, resumos,              
+                                                  classifi...                  
+ gemini_flash   gemini-2.5-flash      google      Gemini Flash —        ativo  
+                                                  analise rapida, bulk         
+                                                  processing,                  
+                                                  classificaca...              
+ perplexity     sonar-deep-research   perplexity  Pesquisador           ativo  
+                                                  profundo. Deep               
+                                                  research com fontes          
+                                                  multiplas, ve...             
+ groq           llama-3.3-70b-versa…  groq        Velocista.            ativo  
+                                                  Inferencia                   
+                                                  ultra-rapida (~10x           
+                                                  mais rapido que              
+                                                  out...                       
+ groq_heavy     llama-3.3-70b-versa…  groq        Groq Heavy — modelo   ativo  
+                                                  de raciocinio ainda          
+                                                  na infra Groq. Para          
+                                                  ...                          
+ claude_sonnet  claude-sonnet-4-6     anthropic   Sonnet 4.6 — tier     ativo  
+                                                  intermediario da             
+                                                  familia Claude. 5x           
+                                                  mais b...                    
+ claude_haiku   claude-haiku-4-5      anthropic   Haiku 4.5 — tier      ativo  
+                                                  mais barato da               
+                                                  familia Claude. ~19x         
+                                                  mais ba...                   
+
+Pipeline v2.0: PromptRefiner -> Decompose -> SmartRouter -> CodeFirst -> Cache 
+-> Pipeline (cap 80% + quality + fallback)
+
+LLM concentration warning: gemini has 2/5 tasks (40%). Consider redistributing.
+C:\Users\alexa\AppData\Local\Programs\Python\Python312\Lib\site-packages\pydantic\main.py:464: UserWarning: Pydantic serializer warnings:
+  PydanticSerializationUnexpectedValue(Expected `enum` - serialized value may not be as expected [field_name='status', input_value='completed', input_type=str])
+  return self.__pydantic_serializer__.to_python(
+┌─────────────────────── Status dos LLMs ────────────────────────┐
+│ LLM          │ Tarefas │ Completas │ Tokens │  Custo  │ Status │
+├──────────────┼─────────┼───────────┼────────┼─────────┼────────┤
+│ claude       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gpt4o        │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini       │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ gemini_flash │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ perplexity   │    1    │     1     │ 10.1k  │  $0.069 │  ████  │
+│ groq         │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ groq_heavy   │    1    │     1     │  2.2k  │  $0.004 │  ████  │
+│ claude_sonnet │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+│ claude_haiku │    0    │     0     │   0    │  $0.000 │  ░░░░  │
+└──────────────┴─────────┴───────────┴────────┴─────────┴────────┘
+
+                              Resumo da Execucao                               
+┌────────┬─────────┬─────────┬────────┬─────────┬─────────┬─────────┬─────────┐
+│        │         │         │        │   Tempo │  Tokens │  Tokens │   Custo │
+│ Tarefa │ Tipo    │ LLM     │ Status │     (s) │      In │     Out │   (US$) │
+├────────┼─────────┼─────────┼────────┼─────────┼─────────┼─────────┼─────────┤
+│ t5     │ data_p… │ code_e… │ CACHE  │     0.0 │       0 │       0 │  0.0000 │
+│ t6     │ review  │ groq_h… │ OK     │     2.5 │    1856 │     362 │  0.0035 │
+│ t1     │ resear… │ perple… │ OK     │   128.0 │    1871 │    8192 │  0.0693 │
+├────────┼─────────┼─────────┼────────┼─────────┼─────────┼─────────┼─────────┤
+│ TOTAL  │         │         │        │   130.5 │    3727 │    8554 │  0.0728 │
+└────────┴─────────┴─────────┴────────┴─────────┴─────────┴─────────┴─────────┘
+
+                           Uso por LLM (5 canonicos)                           
+┌────────┬────────┬────┬───────┬─────────┬────────┬────────┬─────────┬────────┐
+│        │        │    │       │         │        │  Custo │   Tempo │        │
+│ Provi… │ Taref… │ OK │ Falha │ Share % │ Tokens │  (US$) │     (s) │ Cober… │
+├────────┼────────┼────┼───────┼─────────┼────────┼────────┼─────────┼────────┤
+│ Anthr… │   0    │ 0  │   0   │      0% │      0 │ 0.0000 │     0.0 │  NAO   │
+│        │        │    │       │         │        │        │         │ USADO  │
+│ OpenA… │   0    │ 0  │   0   │      0% │      0 │ 0.0000 │     0.0 │  NAO   │
+│        │        │    │       │         │        │        │         │ USADO  │
+│ Googl… │   0    │ 0  │   0   │      0% │      0 │ 0.0000 │     0.0 │  NAO   │
+│        │        │    │       │         │        │        │         │ USADO  │
+│ Perpl… │   1    │ 1  │   0   │     50% │ 10,063 │ 0.0693 │   128.0 │ USADO  │
+│ Groq/… │   1    │ 1  │   0   │     50% │  2,218 │ 0.0035 │     2.5 │ USADO  │
+└────────┴────────┴────┴───────┴─────────┴────────┴────────┴─────────┴────────┘
+
+Cobertura de LLMs: 2/5 (40%)
+
+            Indicadores v2.0            
+ Indicador                        Valor 
+ Tarefas concluidas                   3 
+ Tarefas falhas                       0 
+ Tarefas em cache                     1 
+ Tarefas deduplicadas                 0 
+ Retentativas por qualidade           0 
+ Custo estimado              US$ 0.0742 
+ Custo real                  US$ 0.0728 
+ Tempo total                     146.3s 
+ Limite de orcamento          US$ 15.00 
+
+Relatorio salvo em: output\execution_20260513_191817.json
+
+Todas as tarefas concluidas com sucesso.

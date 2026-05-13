@@ -120,3 +120,69 @@ class TestConfig:
     def test_provider_has_model(self, name):
         assert name in LLM_CONFIGS
         assert LLM_CONFIGS[name].model is not None
+
+
+# ─── _parse_plan resilience (2026-05-13) ────────────────────
+
+class TestParsePlanDependencyFormats:
+    """Garante que _parse_plan aceita os 2 formatos de `dependencies`
+    que LLMs retornam na pratica:
+    - list[str]: ["t1", "t2"]            (formato canonico esperado)
+    - list[dict]: [{"task_id": "t1"}]    (claude_sonnet retorna assim em
+      decomposition apos rebalance 02-mai — bug observado na bateria 360
+      de 13-05-2026 e fixado em src/orchestrator.py:_parse_plan)
+    """
+
+    def _parse(self, raw_tasks: list):
+        import json as _json
+        from src.orchestrator import Orchestrator
+        orch = Orchestrator.__new__(Orchestrator)
+        payload = _json.dumps({"tasks": raw_tasks})
+        return orch._parse_plan(payload, "demanda fake")
+
+    def test_deps_as_strings_unchanged(self):
+        tasks = self._parse([
+            {"id": "t1", "type": "research", "description": "x", "dependencies": []},
+            {"id": "t2", "type": "writing", "description": "y", "dependencies": ["t1"]},
+        ])
+        assert tasks[1].dependencies == ["t1"]
+
+    def test_deps_as_dicts_normalized(self):
+        tasks = self._parse([
+            {"id": "t1", "type": "research", "description": "x", "dependencies": []},
+            {
+                "id": "t2",
+                "type": "writing",
+                "description": "y",
+                "dependencies": [
+                    {"task_id": "t1", "context": "passa o output de t1"},
+                ],
+            },
+        ])
+        assert tasks[1].dependencies == ["t1"]
+
+    def test_deps_mixed_strings_and_dicts(self):
+        tasks = self._parse([
+            {"id": "t1", "type": "research", "description": "x", "dependencies": []},
+            {"id": "t2", "type": "analysis", "description": "y", "dependencies": []},
+            {
+                "id": "t3",
+                "type": "writing",
+                "description": "z",
+                "dependencies": ["t1", {"task_id": "t2"}],
+            },
+        ])
+        assert tasks[2].dependencies == ["t1", "t2"]
+
+    def test_deps_with_unknown_dict_keys_skipped(self):
+        tasks = self._parse([
+            {"id": "t1", "type": "research", "description": "x", "dependencies": []},
+            {
+                "id": "t2",
+                "type": "writing",
+                "description": "y",
+                # dict sem task_id/id/ref - deve ser ignorado
+                "dependencies": [{"foo": "bar"}, "t1"],
+            },
+        ])
+        assert tasks[1].dependencies == ["t1"]

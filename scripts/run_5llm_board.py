@@ -31,13 +31,30 @@ for name in ["orchestrator.py", "router.py", "pipeline.py", "config.py", "llm_cl
 
 CODE_CONTEXT = "\n\n".join(f"=== {k} ===\n{v}" for k, v in CODE_FILES.items())
 
-TASK_PROMPT = (
+# 2026-05-13: aceita demanda customizada via env var DEMAND (passada pelo
+# geo-bridge.sh board "demanda"). Sem DEMAND, mantem o prompt default de
+# auto-analise do orquestrador.
+_DEFAULT_TASK_PROMPT = (
     "Analise este orquestrador multi-LLM (geo-orchestrator) e proponha 1 melhoria "
     "concreta e implementavel. O sistema decompoe demandas em tarefas, distribui entre "
     "5 LLMs (Claude, GPT-4o, Gemini, Perplexity, Groq), executa em waves paralelas. "
     "Tem cache, checkpoints, quality gates, budget guard, router adaptativo, rate limiter, tracing. "
     "Diga: arquivo, funcao, como implementar. Max 400 palavras. PT-BR."
 )
+_DEMAND_ENV = os.environ.get("DEMAND", "").strip()
+TASK_PROMPT = _DEMAND_ENV if _DEMAND_ENV else _DEFAULT_TASK_PROMPT
+# Quando demanda customizada esta presente, NAO injeta CODE_CONTEXT
+# (o board atua como 5 experts respondendo a pergunta do usuario).
+_INJECT_CODE_CONTEXT = not bool(_DEMAND_ENV)
+
+
+def _user_msg(max_ctx: int = 4000) -> str:
+    """Monta o conteudo do user message. Quando ha DEMAND custom, omite
+    o CODE_CONTEXT (board atua como experts gerais respondendo a pergunta).
+    Quando nao ha, mantem o auto-analise do orquestrador com codigo anexo."""
+    if _INJECT_CODE_CONTEXT:
+        return TASK_PROMPT + "\n\n" + CODE_CONTEXT[:max_ctx]
+    return TASK_PROMPT
 
 
 async def call_claude():
@@ -59,7 +76,7 @@ async def call_claude():
             "model": "claude-haiku-4-5-20251001",
             "max_tokens": 800,
             "system": system,
-            "messages": [{"role": "user", "content": TASK_PROMPT + "\n\n" + CODE_CONTEXT[:4000]}],
+            "messages": [{"role": "user", "content": _user_msg(4000)}],
         },
         timeout=60,
     )
@@ -90,7 +107,7 @@ async def call_gpt4o():
             "max_tokens": 800,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": TASK_PROMPT + "\n\n" + CODE_CONTEXT[:4000]},
+                {"role": "user", "content": _user_msg(4000)},
             ],
         },
         timeout=60,
@@ -112,7 +129,7 @@ async def call_gemini():
         "Voce e Jerry Liu, CEO do LlamaIndex. Foco: RAG AGENTICO. "
         "Analise como o orquestrador pode usar recuperacao inteligente de dados e contexto "
         "entre tarefas, similar ao LlamaIndex.\n\n"
-        + TASK_PROMPT + "\n\n" + CODE_CONTEXT[:3500]
+        + _user_msg(3500)
     )
     r = httpx.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}",
@@ -153,7 +170,7 @@ async def call_perplexity():
             "max_tokens": 800,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": TASK_PROMPT + "\n\n" + CODE_CONTEXT[:3500]},
+                {"role": "user", "content": _user_msg(3500)},
             ],
         },
         timeout=60,
@@ -185,7 +202,7 @@ async def call_groq():
             "max_tokens": 800,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": TASK_PROMPT + "\n\n" + CODE_CONTEXT[:3500]},
+                {"role": "user", "content": _user_msg(3500)},
             ],
         },
         timeout=60,

@@ -188,10 +188,14 @@ def _display_summary(report: ExecutionReport) -> None:
         name: {"tasks": 0, "ok": 0, "fail": 0, "cost": 0.0, "tokens": 0, "time_ms": 0}
         for name in ["claude", "gpt4o", "gemini", "perplexity", "groq"]
     }
-    # Mapa para consolidar tier interno Claude no slot canonico.
+    # Mapa para consolidar tier interno por provider no slot canonico.
+    # 2026-05-13: gemini_flash adicionado (estava reportando Google=0 mesmo
+    # quando flash era usado). groq_heavy idem (era contado fora de groq).
     canonical_alias = {
         "claude_sonnet": "claude",
         "claude_haiku": "claude",
+        "gemini_flash": "gemini",
+        "groq_heavy": "groq",
     }
     for r in results_list:
         raw = r.llm_used

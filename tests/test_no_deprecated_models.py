@@ -121,8 +121,10 @@ def test_pipeline_max_tokens_is_capped():
     # 2026-04-14: tetos elevados para demandas profundas.
     # Architecture sobe para 8192 (decomposicao + diagrama detalhado).
     assert Pipeline._max_tokens_for_task("architecture", claude) == 8192
-    # Writing sobe para 16k mas e capado pelo max do modelo (Claude=8192).
-    assert Pipeline._max_tokens_for_task("writing", claude) == 8192
+    # 2026-05-13: writing cap subiu para 16384 (commit b623f15 elevou
+    # max_tokens default 4k->16k para suportar demandas profundas).
+    # Claude Opus 4.6 agora tem max_tokens=32000, entao 16384 nao bate teto.
+    assert Pipeline._max_tokens_for_task("writing", claude) == 16384
     # Tipo desconhecido cai para o default 6144.
     assert Pipeline._max_tokens_for_task("inexistente_xyz", claude) == 6144
     # 2026-04-14: perplexity=8192, tetos elevados para deep work.

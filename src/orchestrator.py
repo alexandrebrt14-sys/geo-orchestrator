@@ -1160,12 +1160,26 @@ class Orchestrator:
             task_type = rt.get("type", "writing")
             if task_type not in valid_types:
                 task_type = "writing"
+            # 2026-05-13: alguns LLMs (notadamente claude_sonnet em decomposition
+            # pos-rebalance 02-mai) retornam dependencies como list de dicts
+            # ({"task_id": "t1", "context": "..."}) em vez de list de strings.
+            # Task.dependencies eh list[str] no schema Pydantic, entao
+            # normalizamos ambos os formatos aqui antes de instanciar.
+            raw_deps = rt.get("dependencies", []) or []
+            deps: list[str] = []
+            for d in raw_deps:
+                if isinstance(d, str):
+                    deps.append(d)
+                elif isinstance(d, dict):
+                    dep_id = d.get("task_id") or d.get("id") or d.get("ref")
+                    if isinstance(dep_id, str):
+                        deps.append(dep_id)
             tasks.append(
                 Task(
                     id=rt.get("id", f"t{len(tasks)+1}"),
                     type=task_type,
                     description=rt.get("description", ""),
-                    dependencies=rt.get("dependencies", []),
+                    dependencies=deps,
                     expected_output=rt.get("expected_output", "texto"),
                 )
             )

@@ -381,7 +381,11 @@ AVG_COST_PER_CALL: dict[str, float] = {
     "gpt4o":         0.015,
     "gemini":        0.005,
     "gemini_flash":  0.001,   # ~5x mais barato que Pro (Flash 2.5: $0.30/$2.50 por M tok)
-    "perplexity":    0.008,
+    # 2026-05-13: recalibrado de $0.008 para $0.05. Bateria 360 mostrou
+    # sonar-deep-research em research profunda gasta $0.04-0.07/call (5-9x
+    # acima do default antigo). Calibrator rejeitava amostras reais por
+    # ratio 8.6x do limite saudavel; valor agora reflete uso real.
+    "perplexity":    0.05,
     "groq":          0.001,
     "groq_heavy":    0.0025,
 }
@@ -429,7 +433,11 @@ PROVIDER_SHARE_CAP: dict[str, float] = {
     "anthropic":  float(os.environ.get("CAP_ANTHROPIC", "0.40")),
     "openai":     float(os.environ.get("CAP_OPENAI", "0.45")),
     "google":     float(os.environ.get("CAP_GOOGLE", "0.45")),
-    "perplexity": float(os.environ.get("CAP_PERPLEXITY", "0.50")),
+    # 2026-05-13: cap reduzido 0.50 -> 0.35. Bateria 360 mostrou Perplexity
+    # consumindo 84% do wall time e 82% do custo de runs com uma unica
+    # task de research profunda. Cap mais agressivo forca decomposicao
+    # de research em sub-tasks ou downgrade para sonar-pro em queries simples.
+    "perplexity": float(os.environ.get("CAP_PERPLEXITY", "0.35")),
     "groq":       float(os.environ.get("CAP_GROQ", "0.65")),
 }
 

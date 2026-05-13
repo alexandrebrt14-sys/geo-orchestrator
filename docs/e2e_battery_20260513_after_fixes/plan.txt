@@ -1,0 +1,28 @@
+Decompondo demanda via Orchestrator v2.0...
+
+┌───────────────────────── Plano de Execucao (v2.0) ──────────────────────────┐
+│ Resumo executivo em 200 palavras sobre evolução do mercado de GEO em        │
+│ 2025-2026, citando 3 plataformas reais.                                     │
+│                                                                             │
+│ Tarefas: 6  |  Custo estimado (decomposicao): US$ 0.0057                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+Pipeline
+├── Wave 1 — 1 tarefa(s) paralelas
+│   └── t1  Pesquisar as principais tendências de mercado para geotecnologia 
+│       (GEO) para o pe... (complexidade: medium)
+├── Wave 2 — 1 tarefa(s) paralelas
+│   └── t2  Analisar os dados da pesquisa de t1 para sintetizar os 3 pontos 
+│       mais importantes... (depende de: t1) (complexidade: medium)
+├── Wave 3 — 1 tarefa(s) paralelas
+│   └── t3  Com base na análise de t2, redigir um rascunho de resumo executivo 
+│       com aproximad... (depende de: t2) (complexidade: medium)
+├── Wave 4 — 2 tarefa(s) paralelas
+│   ├── t4  Sub-review de acentuação: verificar se o texto gerado em t3 segue 
+│   │   estritamente a... (depende de: t3) (complexidade: medium)
+│   └── t5  Sub-review de estilo: analisar o rascunho de t3 para garantir que o
+│       tom é editor... (depende de: t3) (complexidade: medium)
+└── Wave 5 — 1 tarefa(s) paralelas
+    └── t6  Consolidar o rascunho de t3 aplicando as correções de acentuação de
+        t4 e os ajus... (depende de: t3, t4, t5) (complexidade: medium)
+
+Plano salvo em: output\plan_20260513_191538.json
