@@ -7,7 +7,7 @@ Provider limits (as of 2026-03):
 - Gemini 2.5 Flash: 30 RPM (billing ativo, R$500 credito)
 - Perplexity Sonar: 20 RPM
 - Anthropic Claude: 60 RPM
-- OpenAI GPT-4o: 60 RPM
+- OpenAI GPT-5.5: 60 RPM (Sprint 12 — model canonico)
 """
 
 from __future__ import annotations

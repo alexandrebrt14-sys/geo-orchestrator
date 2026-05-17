@@ -452,7 +452,7 @@ class Router:
 
         # Regra 2 (complexity dentro de OPUS_ALLOWED): downgrade classico.
         # 2026-04-14: review/critical_review NUNCA cai para Haiku — qualidade
-        # do review e critica para validar outputs de Opus/GPT-4o. Piso = Sonnet.
+        # do review e critica para validar outputs de Opus/GPT-5.5. Piso = Sonnet.
         if task_type in ("review", "critical_review"):
             if complexity in ("low", "medium") and self._is_usable("claude_sonnet"):
                 logger.info(

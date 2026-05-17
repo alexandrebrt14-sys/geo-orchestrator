@@ -63,7 +63,7 @@ def _check_api_key(env_key: str) -> bool:
 # Mapa LLM canonico (LLM_CONFIGS) -> rotulo de provider para narrativa.
 _LLM_PROVIDER_LABEL: dict[str, str] = {
     "claude":     "Anthropic/Claude",
-    "gpt4o":      "OpenAI/GPT-4o",
+    "gpt4o":      "OpenAI/GPT-5.5",
     "gemini":     "Google/Gemini",
     "perplexity": "Perplexity/Sonar",
     "groq":       "Groq/Llama",

@@ -1,8 +1,9 @@
 """
-Agente especializado em redação usando GPT-4o.
+Agente especializado em redação usando GPT-5.5 (Sprint 12 — COPY PREMIUM ONLY).
 
-Otimizado para produção de conteúdo longo em PT-BR,
-com suporte a múltiplos formatos: artigo, copy, estudo, relatório, e-mail.
+Otimizado para produção de conteúdo longo em PT-BR, com suporte a múltiplos formatos:
+artigo, copy, estudo, relatório, e-mail. Fallback chain: Claude Opus 4.7 → Gemini 2.5 Pro
+→ Perplexity sonar-deep-research. Sonnet/Haiku/Flash banidos como fallback de copy.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ MODE_INSTRUCTIONS = {
 
 
 class WriterAgent(BaseAgent):
-    """Agente de redação usando GPT-4o."""
+    """Agente de redação usando GPT-5.5 (Sprint 12 PREMIUM canonical)."""
 
     def __init__(
         self,

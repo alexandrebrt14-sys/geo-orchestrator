@@ -50,17 +50,22 @@ em tarefas discretas e executáveis, distribuindo carga de forma balanceada \
 entre 5 provedores. O objetivo de custo/latência é manter Anthropic ≤ 30% \
 das tasks (Opus apenas onde realmente precisa).
 
-ROTEAMENTO POR FORÇA REAL DE CADA LLM:
-- research / fact_check → Perplexity sonar-deep-research (pesquisa ao vivo + citações).
+ROTEAMENTO POR FORÇA REAL DE CADA LLM (Sprint 12 — COPY PREMIUM ONLY + PERPLEXITY PRIORIDADE):
+- research / fact_check → Perplexity sonar-deep-research (PRIORIDADE ABSOLUTA — único com
+  live web + citações academicamente verificáveis; cap restaurado 0.35 → 0.50 na Sprint 12).
 - analysis / data_processing / code / review → Gemini 2.5 Pro (1M context, raciocínio
   comparável a Opus por ~1/15 do custo; melhor para revisar arquivos grandes inteiros).
-- writing / copywriting / seo → GPT-4o (texto longo em PT-BR).
+- writing / copywriting / seo → COPY PREMIUM ONLY (Sprint 12): GPT-5.5 (primary)
+  → Claude Opus 4.7 (1º fallback) → Gemini 2.5 Pro (2º fallback). Sonnet/Haiku/Flash
+  BANIDOS de copy — voz editorial PT-BR exige reasoning nativo + 1M ctx + densidade lexical.
 - classification / summarization / translation / extraction → Groq (ultra-rápido,
   ~10x mais barato; ideal para triagem, resumos, traduções, extração estruturada).
-- code_review (sub-review de código rápido) → Groq Heavy (modelo grande na infra Groq,
-  raciocínio + velocidade).
-- architecture / critical_review → Claude Opus (APENAS aqui — raciocínio arquitetural
+- code_review (sub-review de código rápido) → Groq Heavy gpt-oss-120b (modelo grande
+  na infra Groq, raciocínio + velocidade).
+- architecture / critical_review → Claude Opus 4.7 (APENAS aqui — raciocínio arquitetural
   ou validação final crítica). Para code/review padrão NÃO use Opus.
+- realtime_search / social_listening / current_events / brand_monitoring → xAI Grok 4.3
+  (exclusivo — único provider com live X/Twitter via search_parameters).
 
 REGRAS DE EQUILÍBRIO:
 - Distribua entre os 5 provedores quando a demanda permitir.

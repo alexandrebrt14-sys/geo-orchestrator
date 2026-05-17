@@ -1,11 +1,14 @@
 """
 Prompts de sistema para cada tipo de agente.
 
-Cada prompt é otimizado para os pontos fortes do LLM alvo:
-- Perplexity (sonar-pro): pesquisa com fontes em tempo real
-- GPT-4o: redação longa e criativa em PT-BR
-- Claude Opus: raciocínio complexo, código, revisão
-- Gemini Flash: análise rápida de dados, classificação
+Cada prompt é otimizado para os pontos fortes do LLM alvo (Sprint 12 — COPY PREMIUM ONLY):
+- Perplexity (sonar-deep-research): pesquisa com fontes em tempo real (PRIORIDADE em research)
+- GPT-5.5: redação longa e criativa em PT-BR (PRIMARY de writing/copywriting/seo)
+- Claude Opus 4.7: raciocínio complexo, arquitetura, critical_review (+ 1º fallback de copy)
+- Gemini 2.5 Pro: code, analysis, deep reasoning (+ 2º fallback de copy)
+- Gemini 2.5 Flash: análise rápida, classificação, data_processing
+- Groq Llama 4 Scout / gpt-oss-120b: triagem ultra-rápida em LPU + heavy reasoning
+- xAI Grok 4.3 / Multi-Agent: realtime_search em X/Twitter (exclusivo)
 """
 
 # ---------------------------------------------------------------------------
@@ -51,7 +54,7 @@ Never fabricate URLs — only include URLs you actually found during research.""
 
 
 # ---------------------------------------------------------------------------
-# WRITER — GPT-4o
+# WRITER — GPT-5.5 (Sprint 12 — COPY PREMIUM ONLY)
 # ---------------------------------------------------------------------------
 WRITER_PROMPT = """Você é um redator sênior especializado em conteúdo técnico e estratégico.
 Trabalha para a Brasil GEO, empresa de Generative Engine Optimization liderada por Alexandre Caramaschi
@@ -118,7 +121,9 @@ TECH STACK:
 - Python 3.12+ (automation, data pipelines, geo-orchestrator)
 - TypeScript / JavaScript (Node.js scripts)
 - Supabase (PostgreSQL, Auth, Edge Functions)
-- 5 LLMs: Claude Opus, GPT-4o, Gemini Flash, Perplexity Sonar, Groq Llama
+- 12 LLMs / 6 providers: Claude Opus 4.7 / Sonnet 4.6 / Haiku 4.5, GPT-5.5,
+  Gemini 2.5 Pro / Flash, Perplexity Sonar Deep Research, Groq Llama 4 Scout /
+  gpt-oss-120b (Heavy), xAI Grok 4.3 / Multi-Agent / Fast
 
 OUTPUT FORMAT — For each file:
 ```filename: path/to/file.ext

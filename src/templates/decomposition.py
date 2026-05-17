@@ -6,20 +6,38 @@ a demanda do usuário e quebrá-la em tarefas discretas com dependências.
 """
 
 TASK_TYPES_REFERENCE = """
-TIPOS DE TAREFA DISPONÍVEIS:
-- research: Pesquisa aprofundada com fontes (usa Perplexity sonar-pro)
-- analysis: Análise de dados estruturada (usa Gemini 2.5 Flash)
-- writing: Redação de conteúdo longo em PT-BR (usa GPT-4o)
-- architecture: Design de sistema e geração de código (usa Claude Opus)
-- code_generation: Geração de código específico (usa Claude Opus)
-- review: Revisão de qualidade e consistência (usa Claude Opus)
-- classification: Classificação e triagem rápida (usa Groq/Llama 3.3 70B)
-- summarization: Sumarização e síntese rápida (usa Groq/Llama 3.3 70B)
-- translation: Tradução PT-BR <-> EN (usa Groq/Llama 3.3 70B)
-- deploy: Execução de deploy e verificação (automação local)
-- data_processing: Processamento de dados em lote (usa Gemini Flash)
+TIPOS DE TAREFA DISPONÍVEIS (Sprint 12 — COPY PREMIUM ONLY + PERPLEXITY PRIORIDADE):
+- research: Pesquisa aprofundada com fontes (PERPLEXITY sonar-deep-research — PRIORIDADE ABSOLUTA)
+- fact_check: Verificação factual com fontes ao vivo (Perplexity sonar-deep-research)
+- analysis: Análise de dados estruturada (Gemini 2.5 Flash)
+- writing: Redação de conteúdo longo em PT-BR (GPT-5.5 PREMIUM — fallback Opus 4.7 / Gemini Pro)
+- copywriting: Copy persuasivo (GPT-5.5 PREMIUM — fallback Opus 4.7 / Gemini Pro)
+- seo: SEO de longa cauda (GPT-5.5 PREMIUM — fallback Opus 4.7 / Gemini Pro)
+- architecture: Design de sistema (Claude Opus 4.7 — reasoning arquitetural)
+- critical_review: Validação final crítica (Claude Opus 4.7)
+- decomposition: Quebra de demanda em plano (Claude Sonnet 4.6 — wave 1 estável)
+- code: Geração de código de produção (Gemini 2.5 Pro — 1M ctx)
+- code_review: Sub-review rápido de código (Groq Heavy gpt-oss-120b)
+- review: Revisão padrão (Groq Heavy — sub-segundo + diversifica provider)
+- classification: Classificação e triagem rápida (Groq Llama 4 Scout 17B 16E)
+- summarization: Sumarização rápida (Groq Llama 4 Scout)
+- translation: Tradução PT-BR <-> EN (Groq Llama 4 Scout)
+- extraction: Extração estruturada (Groq Heavy gpt-oss-120b)
+- data_processing: Processamento em lote (Gemini 2.5 Flash — 1M ctx)
+- realtime_search: Busca live em X/Twitter (xAI Grok 4.3 — search_parameters)
+- social_listening: Timeline social em tempo real (xAI Grok 4.3)
+- current_events: Eventos atuais (xAI Grok 4.3)
+- brand_monitoring: Monitoramento de marca (xAI Grok 4.3)
+- multi_perspective_decomposition: 4 agentes paralelos nativos (xAI Grok Multi-Agent)
+- long_context_synthesis: Síntese >500K tokens (xAI Grok Multi-Agent — 2M ctx)
+- deploy: Execução de deploy (automação local, sem LLM)
 
-REGRA IMPORTANTE: Sempre inclua pelo menos uma tarefa do tipo classification, summarization ou translation para garantir que o Groq/Llama seja utilizado.
+REGRA IMPORTANTE Sprint 12:
+- Copy (writing/copywriting/seo) NUNCA cai em Sonnet/Haiku/Flash — voz editorial PT-BR
+  exige reasoning nativo + 1M ctx. Hierarquia: GPT-5.5 → Opus 4.7 → Gemini Pro → Perplexity.
+- Research/fact_check SEMPRE prioriza Perplexity sonar-deep-research (cap 0,50).
+- Inclua pelo menos uma tarefa de classification/summarization/translation para ativar
+  Groq LPU (~10x mais barato + ultra-rápido).
 """
 
 DECOMPOSITION_PROMPT = f"""Você é o orquestrador da Brasil GEO, responsável por decompor demandas complexas
@@ -27,20 +45,31 @@ em tarefas discretas que serão executadas por agentes especializados com difere
 
 {TASK_TYPES_REFERENCE}
 
-ROTEAMENTO DE LLMs (5 providers):
-| Tipo de tarefa      | LLM              | Motivo                                       |
-|---------------------|------------------|----------------------------------------------|
-| research            | Perplexity       | Acesso a dados em tempo real com fontes       |
-| analysis            | Gemini 2.5 Flash | Rápido e barato para processar dados          |
-| writing             | GPT-4o           | Melhor qualidade para textos longos em PT-BR  |
-| architecture        | Claude Opus      | Superior em raciocínio complexo e código      |
-| code_generation     | Claude Opus      | Superior em geração de código de produção     |
-| review              | Claude Opus      | Melhor em análise crítica e edge cases        |
-| classification      | Groq/Llama 3.3   | Ultra-rápido para triagem e classificação     |
-| summarization       | Groq/Llama 3.3   | Ultra-rápido para síntese e resumos           |
-| translation         | Groq/Llama 3.3   | Ultra-rápido para tradução PT-BR/EN           |
-| data_processing     | Gemini Flash     | Custo-benefício para operações em lote        |
-| deploy              | local            | Executado via scripts locais, sem LLM         |
+ROTEAMENTO DE LLMs (Sprint 12 — 12 modelos / 6 providers):
+| Tipo de tarefa      | Primary               | Fallback / Motivo                            |
+|---------------------|-----------------------|-----------------------------------------------|
+| research            | Perplexity sonar-deep | PRIORIDADE ABSOLUTA — único com live web      |
+| fact_check          | Perplexity sonar-deep | Fallback: Gemini Pro → Opus 4.7 → GPT-5.5     |
+| writing             | GPT-5.5 PREMIUM       | COPY PREMIUM ONLY: → Opus 4.7 → Gemini Pro    |
+| copywriting         | GPT-5.5 PREMIUM       | COPY PREMIUM ONLY: → Opus 4.7 → Gemini Pro    |
+| seo                 | GPT-5.5 PREMIUM       | COPY PREMIUM ONLY: → Opus 4.7 → Gemini Pro    |
+| architecture        | Claude Opus 4.7       | Raciocínio arquitetural profundo              |
+| critical_review     | Claude Opus 4.7       | Validação final antes de release              |
+| decomposition       | Claude Sonnet 4.6     | Wave 1 estável (Sprint 9)                     |
+| code                | Gemini 2.5 Pro        | 1M ctx + raciocínio comparável a Opus por 1/15|
+| code_review         | Groq Heavy gpt-oss    | Sub-segundo + diversifica provider            |
+| review              | Groq Heavy gpt-oss    | Sub-segundo + diversifica provider            |
+| analysis            | Gemini 2.5 Flash      | Rápido e barato para processar dados          |
+| data_processing     | Gemini 2.5 Flash      | 1M ctx + ~5x mais barato que Pro              |
+| classification      | Groq Llama 4 Scout    | Ultra-rápido LPU para triagem                 |
+| summarization       | Groq Llama 4 Scout    | Ultra-rápido para síntese e resumos           |
+| translation         | Groq Llama 4 Scout    | Ultra-rápido para tradução PT-BR/EN           |
+| extraction          | Groq Heavy gpt-oss    | Extração estruturada com raciocínio           |
+| realtime_search     | xAI Grok 4.3          | EXCLUSIVO — live X/Twitter via search_params  |
+| social_listening    | xAI Grok 4.3          | EXCLUSIVO — timeline social tempo real        |
+| current_events      | xAI Grok 4.3          | EXCLUSIVO — eventos com cross-check live      |
+| brand_monitoring    | xAI Grok 4.3          | EXCLUSIVO — monitoramento marca em redes      |
+| deploy              | local                 | Executado via scripts locais, sem LLM         |
 
 REGRAS DE DECOMPOSIÇÃO:
 1. Cada tarefa deve ser ATÔMICA — uma ação clara com um resultado definido.
