@@ -4,6 +4,71 @@
 > Próxima revisão CTO: **2026-08-01**.
 > Owner: **Alexandre Caramaschi**.
 
+## 2026-05-17 (noite) — Sprint 12 · DIRETRIZ COPY PREMIUM ONLY + PERPLEXITY PRIORIDADE EM RESEARCH
+
+Marco editorial-canônico por ordem direta do CEO Brasil GEO. **Não é otimização de custo — é blindagem de qualidade.** Quatro mudanças conectadas:
+
+### A. Copy só usa modelos premium-tier
+
+Hierarquia obrigatória para `writing` / `copywriting` / `seo`:
+
+```
+1. gpt-5.5            (OpenAI flagship — reasoning nativo, 1M ctx, pt-BR otimizado)
+2. claude-opus-4-7    (Anthropic flagship — voz editorial densa, raciocínio profundo)
+3. gemini-2.5-pro     (Google flagship — 1M ctx + thinking mode)
+4. perplexity         (sonar-deep-research — quando copy precisa de fonte ao vivo)
+--- corte ---
+5. claude-sonnet      (último recurso em outage simultâneo dos 4 acima)
+6. groq_heavy         (último recurso absoluto)
+```
+
+**`TASK_TYPES`** (`src/config.py`): `writing/copywriting/seo` agora têm primary=`gpt4o` (gpt-5.5) e fallback=`claude` (Opus 4.7). Eram `gemini`, `claude_sonnet`, `perplexity` respectivamente — todos abaixo do tier exigido.
+
+**`FALLBACK_CHAINS`**: os 4 primeiros slots são premium-tier, na ordem `gpt4o → claude → gemini → perplexity`. Sonnet/Haiku/Flash só como último recurso.
+
+**Por que:** voz editorial PT-BR de Alexandre exige reasoning nativo, 1M ctx e densidade lexical que Sonnet/Haiku/Flash não entregam consistentemente em copy longa. Incidente curso `saude-mental-vibecoding` (14-05-2026, 3741 linhas sem acento por sub-agente Sonnet) e drift de tom em copy de afiliados em ondas anteriores comprovaram que o tier matter. Custo extra do upgrade (~$10/run editorial) é aceitável vs. retrabalho de QA.
+
+### B. Perplexity como prioridade absoluta em research
+
+`PROVIDER_SHARE_CAP["perplexity"]` restaurado **`0.35 → 0.50`**. O cap de 0.35 (Sprint 10, bateria 360) era justificado quando 1 task de research dominava 84% wall time em runs com decomposição rasa — mas o `adaptive_decomposer` agora decompõe research em sub-tasks naturalmente, e o cap rígido sufocava deep research editorial.
+
+`FALLBACK_CHAINS["research"]` reordenado para priorizar qualidade de fonte:
+
+```
+research: [perplexity, gemini, claude, gpt4o, claude_sonnet, groq_heavy]
+           ↑ sonar-deep-research é único com live web + citações verificáveis
+```
+
+`fact_check` recebe o mesmo tratamento (Perplexity primary, Gemini Pro → Opus 4.7 → gpt-5.5 como fallback).
+
+### C. Catalog YAML sincronizado (drift fechado da Sprint 11)
+
+`catalog/model_catalog.yaml` versão `2.0 → 2.1`:
+
+- `openai.models.gpt-4o` → `openai.models.gpt-5.5` (estava em drift desde Sprint 11)
+- Pricing $2.50/$10.00 → **$5.00/$15.00** por Mtok (refletido em `test_sprint7.py`)
+- `tier: standard → premium`, `complexity_min: 3` (novo)
+- Novos task_routing entries: `copywriting` e `seo` com `model_override: gpt-5.5` + `fallback_models: [claude-opus-4-7, gemini-2.5-pro, sonar-deep-research]`
+- `caps.per_provider.perplexity 0.50` alinhado com `config.PROVIDER_SHARE_CAP`
+- `caps.per_provider.xai 0.30` (faltava no YAML)
+
+### D. Smart router hints atualizadas
+
+`smart_router._ensure_provider_diversity` em planos COMPLEX 5+ tasks: quando **Anthropic ausente**, antes de promover decomposition → Sonnet, tenta promover `writing/copywriting/seo` → `claude` (Opus 4.7). Mesma lógica em **Google ausente** → promover copy para `gemini` (Pro). Garante que mesmo em diversity upgrade o tier de copy permaneça premium.
+
+### Validação
+
+- **Testes:** 223 passed + 1 xfailed em 14.34s (mesma suíte da Sprint 11; nenhuma regressão).
+- **Fix de drift:** `test_sprint5.py::test_no_drift_vs_config` e `test_sprint7.py::test_catalog_provides_correct_costs` voltaram a verde após sincronização.
+- **Custo da mudança:** $0 (refator de routing puro — sem chamada LLM).
+
+### O que NÃO mudou (deliberadamente)
+
+- `code` (primary `gemini` Pro, fallback `claude_sonnet`) — código não exige tier premium em geral, e Gemini 2.5 Pro tem 1M ctx + raciocínio comparável a Opus em geração de código.
+- `decomposition` (primary `claude_sonnet`) — Sonnet 4.6 é estável para wave 1; Opus seria overkill aqui.
+- `classification/translation/summarization/extraction` continuam em Groq (Llama 4 Scout LPU + gpt-oss-120b heavy) — não são copy.
+- xAI Grok task types (`realtime_search`, `social_listening`, etc.) intocados — pertencem a outro vertical (busca live X/Twitter).
+
 ## 2026-05-17 (tarde) — Upgrade OpenAI gpt-4o → gpt-5.5
 
 Marco de upgrade pontual disparado por ordem direta do CEO Brasil GEO:

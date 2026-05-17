@@ -3,8 +3,16 @@
 # Sprint 5 (2026-04-08): re-sincronizado com src/config.LLM_CONFIGS canonicos.
 # Generated artifacts: config.py tables, README pricing, site page, CLI help.
 
-version: "2.0"
-last_updated: "2026-04-08"
+version: "2.1"
+last_updated: "2026-05-17"
+# 2026-05-17 Sprint 12 — diretriz canonica:
+#   * COPY (writing/copywriting/seo) so usa modelos PREMIUM-tier:
+#     gpt-5.5 (OpenAI flagship), claude-opus-4-7 (Anthropic flagship)
+#     ou gemini-2.5-pro (Google flagship). Sonnet/Haiku/Flash banidos
+#     de copy. Refletido em task_routing + FALLBACK_CHAINS no config.py.
+#   * RESEARCH (research/fact_check) com perplexity sonar-deep-research
+#     como prioridade absoluta. Cap por provider voltou 0.35 -> 0.50
+#     (era de Sprint 10/bateria 360 e sufocava deep research editorial).
 
 providers:
   anthropic:
@@ -49,14 +57,21 @@ providers:
     display_name: "OpenAI"
     api_key_env: OPENAI_API_KEY
     models:
-      gpt-4o:
-        display: "GPT-4o"
-        input_cost_per_mtok: 2.50
-        output_cost_per_mtok: 10.00
-        max_tokens: 16384
+      gpt-5.5:
+        display: "GPT-5.5"
+        # 2026-05-17 Sprint 12 — sincronizado com config.py canonico.
+        # Upgrade Sprint 11 ja havia trocado o model_id no config.py
+        # (gpt-4o -> gpt-5.5, lancado 23-abr-2026); catalog YAML estava
+        # em drift desde entao. Sprint 12 fecha o drift e promove gpt-5.5
+        # a model PREMIUM canonico de writing/copywriting/seo (diretriz
+        # COPY PREMIUM ONLY). Reasoning nativo + 1M ctx + pt-BR otimizado.
+        input_cost_per_mtok: 5.00
+        output_cost_per_mtok: 15.00
+        max_tokens: 32768
         rpm: 60
-        capabilities: [writing, seo, copywriting, analysis, translation]
-        tier: standard
+        capabilities: [writing, seo, copywriting, analysis, translation, reasoning]
+        tier: premium
+        complexity_min: 3
         config_alias: gpt4o
         status: active
 
@@ -193,14 +208,37 @@ tier_routing:
 # 2026-05-02 — REBALANCEAMENTO: Gemini e Groq como protagonistas.
 # Anthropic so e preferred em "architecture" e "critical_review".
 task_routing:
+  # 2026-05-17 Sprint 12 — RESEARCH com Perplexity como prioridade absoluta.
+  # Fallback chain prioriza qualidade de fonte (Gemini Pro 1M ctx + Opus 4.7
+  # raciocinio) sobre velocidade/custo. groq/groq_heavy so como ultimo recurso.
+  # Cap 0.50 (era 0.35 pos-bateria 360) — deep research editorial e prioridade.
   research:
     required_capabilities: [research, live_search]
     preferred_provider: perplexity
-    fallback: [google, openai, groq]
+    model_override: sonar-deep-research
+    fallback: [google, anthropic, openai]
+    fallback_models: [gemini-2.5-pro, claude-opus-4-7, gpt-5.5]
+  # 2026-05-17 Sprint 12 — COPY PREMIUM ONLY (writing/copywriting/seo).
+  # Fallback chain so cai em Anthropic (Opus 4.7) e Google (Gemini 2.5 Pro);
+  # NUNCA em Sonnet/Haiku/Flash. Refletido em FALLBACK_CHAINS do config.py.
   writing:
     required_capabilities: [writing, seo]
     preferred_provider: openai
-    fallback: [google, anthropic]
+    model_override: gpt-5.5
+    fallback: [anthropic, google, perplexity]
+    fallback_models: [claude-opus-4-7, gemini-2.5-pro, sonar-deep-research]
+  copywriting:
+    required_capabilities: [writing, copywriting]
+    preferred_provider: openai
+    model_override: gpt-5.5
+    fallback: [anthropic, google, perplexity]
+    fallback_models: [claude-opus-4-7, gemini-2.5-pro, sonar-deep-research]
+  seo:
+    required_capabilities: [seo, writing]
+    preferred_provider: openai
+    model_override: gpt-5.5
+    fallback: [anthropic, google, perplexity]
+    fallback_models: [claude-opus-4-7, gemini-2.5-pro, sonar-deep-research]
   analysis:
     required_capabilities: [analysis, data_processing]
     preferred_provider: google
@@ -263,7 +301,9 @@ task_routing:
   fact_check:
     required_capabilities: [fact_check, live_search]
     preferred_provider: perplexity
-    fallback: [google, anthropic]
+    model_override: sonar-deep-research
+    fallback: [google, anthropic, openai]
+    fallback_models: [gemini-2.5-pro, claude-opus-4-7, gpt-5.5]
 
 # Budget limits — alinhados com src/config.FINOPS_DAILY_LIMITS
 # 2026-05-09 — modo POTENCIA MAXIMA: caps reset por ordem direta do CEO Brasil GEO
@@ -280,18 +320,26 @@ budgets:
   alert_threshold: 0.80
   block_threshold: 0.95
 
-# Provider concentration cap — alinhado com src/config.PROVIDER_SHARE_CAP
-# (rebalanceamento 2026-05-02). Anthropic apertado para 30% para forcar
-# Gemini/Groq como protagonistas em demandas tipicas. Opus volta a ser
-# usado apenas onde realmente precisa (architecture, critical_review).
+# Provider concentration cap — alinhado com src/config.PROVIDER_SHARE_CAP.
+# Historia:
+#   * 2026-05-02 v1: rebalanceamento Gemini/Groq como protagonistas.
+#   * 2026-05-09 v2: Anthropic 0.30 -> 0.40 (Sonnet+Haiku precisavam folga
+#     pos-bateria de 5 waves), Google 0.55 -> 0.45 (blast radius outage).
+#   * 2026-05-13 v3: Perplexity 0.50 -> 0.35 (research dominava 84% wall
+#     time em runs de research profunda — bateria 360).
+#   * 2026-05-17 Sprint 12: Perplexity RESTAURADA 0.35 -> 0.50 pela
+#     diretriz "Perplexity prioridade em research". Decomposicao adaptativa
+#     do adaptive_decomposer controla wall time agora; cap rigido sufocava
+#     deep research editorial.
 caps:
   default_share: 0.50
   per_provider:
-    anthropic: 0.30
+    anthropic: 0.40
     openai: 0.45
-    google: 0.55
+    google: 0.45
     perplexity: 0.50
     groq: 0.65
+    xai: 0.30
 
 # Operational modes
 modes:

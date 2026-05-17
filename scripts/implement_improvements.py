@@ -89,7 +89,7 @@ async def task_gpt4o():
     r = httpx.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '')}", "Content-Type": "application/json"},
-        json={"model": "gpt-4o-mini", "max_tokens": 2000,
+        json={"model": "gpt-5.5-mini", "max_tokens": 2000,
               "messages": [{"role": "user", "content": prompt}]},
         timeout=90,
     )

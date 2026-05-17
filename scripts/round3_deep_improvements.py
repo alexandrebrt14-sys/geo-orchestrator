@@ -64,7 +64,7 @@ async def consult_gpt4o():
     t0 = time.time()
     r = httpx.post("https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY','')}", "Content-Type": "application/json"},
-        json={"model": "gpt-4o-mini", "max_tokens": 1200,
+        json={"model": "gpt-5.5-mini", "max_tokens": 1200,
               "messages": [{"role": "system", "content": "Voce e um especialista em UX de ferramentas CLI e developer experience. Pense em como FACILITAR O USO e AUMENTAR A PRODUTIVIDADE do desenvolvedor."},
                            {"role": "user", "content": f"{PROJECT}\n\nProponha O APRIMORAMENTO MAIS PROFUNDO para a experiencia do usuario deste orquestrador. Como tornar a CLI mais intuitiva, os reports mais uteis, a configuracao mais simples? Seja especifico. Max 500 palavras. PT-BR."}]},
         timeout=60)
@@ -145,7 +145,7 @@ async def implement_gpt4o(proposals_summary):
     t0 = time.time()
     r = httpx.post("https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY','')}", "Content-Type": "application/json"},
-        json={"model": "gpt-4o-mini", "max_tokens": 2500,
+        json={"model": "gpt-5.5-mini", "max_tokens": 2500,
               "messages": [{"role": "user", "content": f"Baseado nestas propostas:\n{proposals_summary}\n\nImplemente uma funcao Python render_live_dashboard(results, plan, costs) que usa a biblioteca rich para mostrar um dashboard em tempo real no terminal com:\n- Tabela de progresso das tarefas (status, LLM, tempo, custo)\n- Barra de progresso geral\n- Metricas de custo acumulado por provider\n- Timeline ASCII das waves\nCodigo completo, pronto para importar. Max 80 linhas."}]},
         timeout=120)
     d = r.json(); u = d.get("usage",{})

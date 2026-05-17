@@ -47,10 +47,12 @@ class TestCatalogRuntimeSoT:
         except ImportError:
             pytest.skip("PyYAML nao instalado")
         from src.config import LLM_CONFIGS
-        # gpt-4o = $2.50 / $10.00 per Mtok = 0.0025 / 0.010 per 1k
+        # 2026-05-17 Sprint 12 — model id canonico gpt4o ja e gpt-5.5
+        # desde Sprint 11 (commit c40d6d1). Pricing: $5.00 / $15.00 per Mtok
+        # = 0.005 / 0.015 per 1k. Sprint 12 fechou drift do catalog YAML.
         gpt = LLM_CONFIGS["gpt4o"]
-        assert gpt.cost_per_1k_input == pytest.approx(0.0025, abs=1e-6)
-        assert gpt.cost_per_1k_output == pytest.approx(0.010, abs=1e-6)
+        assert gpt.cost_per_1k_input == pytest.approx(0.005, abs=1e-6)
+        assert gpt.cost_per_1k_output == pytest.approx(0.015, abs=1e-6)
         # claude opus = $15 / $75 per Mtok
         claude = LLM_CONFIGS["claude"]
         assert claude.cost_per_1k_input == pytest.approx(0.015, abs=1e-6)

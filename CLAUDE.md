@@ -1,5 +1,60 @@
 # CLAUDE.md — geo-orchestrator
 
+## 2026-05-17 — Sprint 12 · DIRETRIZ COPY PREMIUM ONLY + PERPLEXITY PRIORIDADE
+
+Diretriz canônica direta do CEO da Brasil GEO. Quatro mudanças conectadas:
+
+### 1. Copy (writing / copywriting / seo) só usa modelos PREMIUM-tier
+
+`TASK_TYPES` em `src/config.py`:
+- `writing`: `gpt4o` (gpt-5.5) → fallback `claude` (Opus 4.7). Era `gemini`.
+- `copywriting`: `gpt4o` (gpt-5.5) → fallback `claude` (Opus 4.7). Era `claude_sonnet`.
+- `seo`: `gpt4o` (gpt-5.5) → fallback `claude` (Opus 4.7). Era `perplexity`.
+
+`FALLBACK_CHAINS` reordenadas para premium-only nos 4 primeiros slots:
+```
+writing/copywriting/seo: [gpt4o, claude, gemini, perplexity, claude_sonnet, groq_heavy]
+                          ↑ gpt-5.5  Opus 4.7  Gemini Pro  sonar-deep  (último recurso)
+```
+
+**Por que:** voz editorial PT-BR de Alexandre exige reasoning nativo + 1M ctx + densidade lexical que Sonnet/Haiku/Flash não entregam. Incidente curso `saude-mental-vibecoding` em 14-05-2026 (sub-agentes Sonnet produziram 3741 linhas sem acentos) reforçou a necessidade de blindar copy contra downgrade automático.
+
+### 2. Research / fact_check com Perplexity como prioridade absoluta
+
+`PROVIDER_SHARE_CAP["perplexity"]` restaurado `0.35 → 0.50`. O cap de 0.35 (Sprint 10) era de quando 1 task de research dominava 84% do wall time em runs com decomposição rasa. Sprint 12 reverte para 0.50 porque o `adaptive_decomposer` agora decompõe research em sub-tasks naturalmente, e o cap rígido sufocava deep research editorial.
+
+`FALLBACK_CHAINS["research"]` reordenado para priorizar qualidade de fonte:
+```
+research: [perplexity, gemini, claude, gpt4o, claude_sonnet, groq_heavy]
+           ↑ sonar-deep  Gemini Pro  Opus 4.7  gpt-5.5  (último recurso)
+```
+
+### 3. Catalog YAML sincronizado (drift fechado)
+
+`catalog/model_catalog.yaml` versão `2.0 → 2.1`:
+- `openai.models.gpt-4o` → `openai.models.gpt-5.5` (estava em drift desde Sprint 11)
+- Pricing $2.50/$10.00 → $5.00/$15.00 por Mtok
+- `tier: standard` → `tier: premium`
+- `complexity_min: 3` (novo)
+- `task_routing.writing` ganha `model_override: gpt-5.5` + `fallback_models: [claude-opus-4-7, gemini-2.5-pro, sonar-deep-research]`
+- Novos task_routing entries: `copywriting` e `seo` (antes só `writing` existia no YAML)
+- `caps.per_provider.perplexity` `0.50` (alinhado com config.py após reversão)
+
+Teste corrigido: `tests/test_sprint7.py::TestCatalogRuntimeSoT::test_catalog_provides_correct_costs` (validava $2.50/$10.00 do gpt-4o; agora valida $5.00/$15.00 do gpt-5.5).
+
+### 4. Smart router diversity hints — Opus 4.7 entra antes em copy
+
+Em planos COMPLEX (5+ tasks) quando Anthropic está ausente, `_ensure_provider_diversity` agora tenta promover `writing/copywriting/seo` → `claude` (Opus 4.7) ANTES de promover decomposition → Sonnet. Mesma lógica em Gemini Pro como 3º tier de copy.
+
+### Status pós-Sprint 12
+
+- **Testes:** 223 passed + 1 xfailed em 14.34s (100% efetivo)
+- **Linhas tocadas:** `src/config.py` (~25), `src/smart_router.py` (+15), `catalog/model_catalog.yaml` (~50), `tests/test_sprint7.py` (3), `README.md` (~40), `CLAUDE.md` (este bloco), `docs/ROADMAP_2026Q2-Q4.md` (Sprint 12 adicionada).
+- **Página pública:** `alexandrecaramaschi.com/geo-orchestrator` atualizada (FAQ Sprint 12, tabela RoutingMatrix, providerCaps Perplexity 0.50, hero badge "SPRINT 12").
+- **Custo da mudança:** $0 (apenas refator de routing — sem chamada LLM).
+
+---
+
 ## 2026-04-09 — Wave F (Onda 3 versão solo)
 
 ### B-019: SDK público `geo_orchestrator_sdk`

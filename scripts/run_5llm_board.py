@@ -103,7 +103,7 @@ async def call_gpt4o():
             "Content-Type": "application/json",
         },
         json={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.5-mini",
             "max_tokens": 800,
             "messages": [
                 {"role": "system", "content": system},

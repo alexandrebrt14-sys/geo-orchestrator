@@ -296,15 +296,23 @@ class TaskRouting:
 TASK_TYPES: dict[str, TaskRouting] = {
     "research":         TaskRouting(primary="perplexity",    fallback="gemini"),
     "analysis":         TaskRouting(primary="gemini_flash",  fallback="groq_heavy"),
-    "writing":          TaskRouting(primary="gpt4o",         fallback="gemini"),
-    "copywriting":      TaskRouting(primary="gpt4o",         fallback="claude_sonnet"),
+    # 2026-05-17 Sprint 12 — diretriz canonica COPY PREMIUM ONLY.
+    # writing/copywriting/seo so podem cair em modelos TOP-tier: gpt-5.5 (OpenAI
+    # flagship), claude-opus-4-7 (Anthropic flagship) ou gemini-2.5-pro (Google
+    # flagship). NUNCA cair em Sonnet/Haiku/Flash em copy — qualidade editorial
+    # do copy de Alexandre exige modelos com reasoning nativo + 1M ctx + voz
+    # PT-BR de alta densidade. Sonnet/Haiku/Flash continuam disponiveis em
+    # outras fases (decomposition, classification, summarization, fallback de
+    # ultimo recurso em FALLBACK_CHAINS) mas SEMPRE depois dos 3 premium.
+    "writing":          TaskRouting(primary="gpt4o",         fallback="claude"),
+    "copywriting":      TaskRouting(primary="gpt4o",         fallback="claude"),
     "code":             TaskRouting(primary="gemini",        fallback="claude_sonnet"),
     "review":           TaskRouting(primary="groq_heavy",    fallback="gemini_flash"),
     "architecture":     TaskRouting(primary="claude",        fallback="gemini"),
     "critical_review":  TaskRouting(primary="claude",        fallback="gemini"),
     "decomposition":    TaskRouting(primary="claude_sonnet", fallback="gemini"),
     "code_review":      TaskRouting(primary="groq_heavy",    fallback="claude_sonnet"),
-    "seo":              TaskRouting(primary="gpt4o",         fallback="perplexity"),
+    "seo":              TaskRouting(primary="gpt4o",         fallback="claude"),
     "data_processing":  TaskRouting(primary="gemini_flash",  fallback="groq"),
     "fact_check":       TaskRouting(primary="perplexity",    fallback="gemini_flash"),
     "classification":   TaskRouting(primary="groq",          fallback="gemini_flash"),
@@ -359,9 +367,24 @@ MODEL_TIERS: dict[str, list[str]] = {
 # o 1o fallback nao depende da mesma infra. Reduz o "single provider, single
 # point of failure" do rebalance original.
 FALLBACK_CHAINS: dict[str, list[str]] = {
-    "research":         ["perplexity",    "gemini",        "gpt4o",         "claude_sonnet", "groq_heavy",   "groq"],
-    "writing":          ["gpt4o",         "claude_sonnet", "gemini",        "perplexity",    "groq_heavy",   "groq"],
-    "copywriting":      ["gpt4o",         "claude_sonnet", "gemini",        "perplexity",    "groq_heavy",   "groq"],
+    # 2026-05-17 Sprint 12 — research/fact_check com Perplexity como PRIORIDADE
+    # absoluta. Em research profunda, Perplexity sonar-deep-research e o unico
+    # com live web search + citacoes academicas verificaveis. Cap voltou
+    # 0.35 -> 0.50 (era do tempo da bateria 360 quando 1 task domava 84% wall
+    # time). Sprint 12 prioriza qualidade de fonte sobre folga de cap; o cap
+    # mais largo nao implica concentracao — quase todas as runs uso Perplexity
+    # em 1-2 tasks, nao em 50% do plano.
+    "research":         ["perplexity",    "gemini",        "claude",        "gpt4o",         "claude_sonnet", "groq_heavy"],
+    # 2026-05-17 Sprint 12 — DIRETRIZ COPY PREMIUM ONLY.
+    # Os 3 primeiros slots de writing/copywriting/seo SAO TODOS premium-tier:
+    # gpt-5.5 (OpenAI flagship 1M ctx + reasoning nativo), claude-opus-4-7
+    # (Anthropic flagship $15/$75 raciocinio profundo + voz editorial), e
+    # gemini-2.5-pro (Google flagship 1M ctx). Perplexity entra no 4o slot
+    # por fornecer citacoes ao vivo (util em copy autoral com fatos novos).
+    # claude_sonnet e groq_heavy so como ultimo recurso em outage simultaneo
+    # dos 4 flagships acima. NUNCA Flash/Haiku em copy.
+    "writing":          ["gpt4o",         "claude",        "gemini",        "perplexity",    "claude_sonnet", "groq_heavy"],
+    "copywriting":      ["gpt4o",         "claude",        "gemini",        "perplexity",    "claude_sonnet", "groq_heavy"],
     "code":             ["gemini",        "claude_sonnet", "groq_heavy",    "gpt4o",         "claude",       "groq"],
     "review":           ["groq_heavy",    "gemini_flash",  "claude_sonnet", "gpt4o",         "claude",       "groq"],
     "architecture":     ["claude",        "gemini",        "gpt4o",         "claude_sonnet", "groq_heavy",   "groq"],
@@ -369,7 +392,7 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
     "decomposition":    ["claude_sonnet", "gemini",        "gpt4o",         "groq_heavy",    "claude",       "groq"],
     "code_review":      ["groq_heavy",    "claude_sonnet", "gemini",        "gpt4o",         "claude",       "groq"],
     "analysis":         ["gemini_flash",  "groq_heavy",    "gpt4o",         "claude_sonnet", "perplexity",   "groq"],
-    "seo":              ["gpt4o",         "perplexity",    "gemini",        "claude_sonnet", "groq_heavy",   "groq"],
+    "seo":              ["gpt4o",         "claude",        "gemini",        "perplexity",    "claude_sonnet", "groq_heavy"],
     "data_processing":  ["gemini_flash",  "groq_heavy",    "gpt4o",         "claude_sonnet", "perplexity",   "groq"],
     "fact_check":       ["perplexity",    "gemini_flash",  "gpt4o",         "claude_sonnet", "groq_heavy",   "groq"],
     "classification":   ["groq",          "gemini_flash",  "claude_haiku",  "groq_heavy",    "gpt4o",        "perplexity"],
@@ -534,11 +557,15 @@ PROVIDER_SHARE_CAP: dict[str, float] = {
     "anthropic":  float(os.environ.get("CAP_ANTHROPIC", "0.40")),
     "openai":     float(os.environ.get("CAP_OPENAI", "0.45")),
     "google":     float(os.environ.get("CAP_GOOGLE", "0.45")),
-    # 2026-05-13: cap reduzido 0.50 -> 0.35. Bateria 360 mostrou Perplexity
-    # consumindo 84% do wall time e 82% do custo de runs com uma unica
-    # task de research profunda. Cap mais agressivo forca decomposicao
-    # de research em sub-tasks ou downgrade para sonar-pro em queries simples.
-    "perplexity": float(os.environ.get("CAP_PERPLEXITY", "0.35")),
+    # 2026-05-17 Sprint 12 — cap RESTAURADO 0.35 -> 0.50 por diretriz canonica
+    # "Perplexity como prioridade em research". O cap de 0.35 (Sprint 10) era
+    # justificado quando research nao tinha decomposicao mas sufocava deep
+    # research em runs editoriais. Sprint 12 reverte para 0.50, mantendo a
+    # decomposicao adaptativa do adaptive_decomposer como mecanismo principal
+    # de controle de wall time (em vez de cap rigido). Perplexity sonar-deep
+    # -research e o unico provider com citacoes academicas verificaveis +
+    # live web — qualidade de fonte vence folga de cap.
+    "perplexity": float(os.environ.get("CAP_PERPLEXITY", "0.50")),
     "groq":       float(os.environ.get("CAP_GROQ", "0.65")),
     # 2026-05-17 — xAI Grok com cap moderado inicial. Cuidado: pricing flat
     # $1.25/$2.50 nao tem tier "barato"; sem cap, demanda multi-task pode

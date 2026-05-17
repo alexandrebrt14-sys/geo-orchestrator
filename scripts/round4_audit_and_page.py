@@ -127,7 +127,7 @@ async def phase2_gpt4o_content(context):
     t0 = time.time()
     r = httpx.post("https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY','')}", "Content-Type": "application/json"},
-        json={"model": "gpt-4o-mini", "max_tokens": 3000,
+        json={"model": "gpt-5.5-mini", "max_tokens": 3000,
               "messages": [{"role": "system", "content": "Voce e um copywriter tecnico senior. Escreva conteudo para uma pagina web de showcase de projeto de IA. Tom: profissional, dados concretos, sem buzzwords vazios. PT-BR."},
                            {"role": "user", "content": f"Baseado nesta auditoria e pesquisa, escreva o CONTEUDO COMPLETO para cada secao da pagina do geo-orchestrator:\n\nAUDITORIA:\n{context['audit'][:2000]}\n\nPESQUISA:\n{context['research'][:1500]}\n\nESTRUTURA:\n{context['structure'][:1000]}\n\nEscreva o texto de cada secao: Hero (titulo + subtitulo + CTA), Como Funciona, 5 LLMs, Funcionalidades, Metricas, Stack, Como Usar. Markdown formatado."}]},
         timeout=120)

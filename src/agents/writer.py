@@ -83,7 +83,7 @@ class WriterAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Any,
-        model_name: str = "gpt-4o",
+        model_name: str = "gpt-5.5",
         writing_mode: WritingMode = WritingMode.ARTICLE,
         cost_per_1k_input: float = 0.0025,
         cost_per_1k_output: float = 0.01,

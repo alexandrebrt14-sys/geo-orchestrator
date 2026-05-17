@@ -50,7 +50,7 @@ async def harrison_chase():
     t0 = time.time()
     r = httpx.post("https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY','')}", "Content-Type": "application/json"},
-        json={"model": "gpt-4o-mini", "max_tokens": 600,
+        json={"model": "gpt-5.5-mini", "max_tokens": 600,
               "messages": [{"role": "system", "content": "Voce e Harrison Chase (LangChain/LangGraph). Compare este orquestrador com LangGraph. O que ele faz diferente? Onde e melhor? Onde pode melhorar? PT-BR. Max 200 palavras."},
                            {"role": "user", "content": CONTEXT}]},
         timeout=60)

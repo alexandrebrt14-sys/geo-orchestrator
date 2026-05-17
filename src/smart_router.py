@@ -720,10 +720,18 @@ class SmartRouter(Router):
 
         # Heuristicas de upgrade por provider ausente (ordem de preferencia
         # de task type que mais ganha com aquele provider)
+        # 2026-05-17 Sprint 12 — hints atualizadas pela diretriz COPY PREMIUM ONLY.
+        # Quando Anthropic esta ausente em plano COMPLEX, antes de promover
+        # decomposition->Sonnet, tentamos promover writing/copywriting/seo
+        # para Opus 4.7 (canal premium de copy). So caimos em Sonnet de
+        # decomposition se nao houver task editorial no plano.
         upgrade_hints: dict[str, list[tuple[str, str]]] = {
             "anthropic": [
                 ("architecture", "claude"),
                 ("critical_review", "claude"),
+                ("writing", "claude"),       # Sprint 12: copy premium
+                ("copywriting", "claude"),   # Sprint 12: copy premium
+                ("seo", "claude"),           # Sprint 12: copy premium
                 ("decomposition", "claude_sonnet"),
                 ("code_review", "claude_sonnet"),
             ],
@@ -733,6 +741,9 @@ class SmartRouter(Router):
                 ("seo", "gpt4o"),
             ],
             "google": [
+                ("writing", "gemini"),       # Sprint 12: 3o tier copy premium
+                ("copywriting", "gemini"),   # Sprint 12: 3o tier copy premium
+                ("seo", "gemini"),           # Sprint 12: 3o tier copy premium
                 ("code", "gemini"),
                 ("analysis", "gemini"),
                 ("data_processing", "gemini_flash"),

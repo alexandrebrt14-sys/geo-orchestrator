@@ -11,7 +11,14 @@ Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) conten
 
 **12,500+ lines | 1,189+ calls tracked | 12 models / 6 providers | unified tracking via [geo-finops](https://github.com/alexandrebrt14-sys/geo-finops)**
 
-> **Updated 2026-05-17** — Adicionado **xAI Grok (com K) como 6º provider canônico**, distinto de Groq Inc (com Q, chips LPU). 3 entradas Grok (`grok` grok-4.3 / `grok_multi` grok-4.20-multi-agent / `grok_fast` grok-4.20-non-reasoning). 6 task types novos exclusivos: realtime_search, social_listening, current_events, brand_monitoring, multi_perspective_decomposition, long_context_synthesis. Upgrades simultâneos: Claude Opus 4.6→4.7, Groq default Llama 3.3 70B → Llama 4 Scout 17B 16E, Groq Heavy default → openai/gpt-oss-120b. **Diversity guarantee em planos COMPLEX 5+ tasks** baseado em Mixture of Agents (Wang 2024) + DAAO (2509.11079) + AdaptOrch (2602.16873). Detalhes: [docs/research/multi-llm-orchestration-2026.md](docs/research/multi-llm-orchestration-2026.md).
+> **Updated 2026-05-17 (Sprint 12) — DIRETRIZ CANÔNICA COPY PREMIUM ONLY + PERPLEXITY PRIORIDADE EM RESEARCH**.
+> Quatro mudanças canônicas:
+> 1. **Copy (`writing` / `copywriting` / `seo`)** só pode ser produzido por modelos **PREMIUM-tier**: `gpt-5.5` (OpenAI flagship, default), `claude-opus-4-7` (Anthropic flagship, 1º fallback) ou `gemini-2.5-pro` (Google flagship, 2º fallback). **Sonnet / Haiku / Flash banidos de copy** (qualidade editorial PT-BR exige reasoning nativo + 1M ctx). Refletido em `TASK_TYPES` + `FALLBACK_CHAINS` + `smart_router.upgrade_hints`.
+> 2. **Research / fact_check** com **Perplexity sonar-deep-research como prioridade absoluta**. Cap por provider RESTAURADO `0.35 → 0.50` (era de Sprint 10/bateria 360 e sufocava deep research editorial). Fallback chain prioriza Gemini 2.5 Pro (1M ctx) → Opus 4.7 (raciocínio) → gpt-5.5; groq/groq_heavy só como último recurso.
+> 3. **Catalog YAML sincronizado**: `gpt-4o` → `gpt-5.5` no catalog (estava em drift desde Sprint 11). Pricing $5.00/$15.00 por Mtok refletido em testes (`test_sprint7.py:catalog_provides_correct_costs`).
+> 4. **Smart router hints atualizadas**: quando Anthropic ausente em plano COMPLEX, antes de promover decomposition → Sonnet, tenta promover `writing/copywriting/seo` → Opus 4.7. Mesma lógica em Gemini Pro para 3º tier de copy.
+>
+> **Updated 2026-05-17 (Sprint 11)** — Adicionado **xAI Grok (com K) como 6º provider canônico**, distinto de Groq Inc (com Q, chips LPU). 3 entradas Grok (`grok` grok-4.3 / `grok_multi` grok-4.20-multi-agent / `grok_fast` grok-4.20-non-reasoning). 6 task types novos exclusivos: realtime_search, social_listening, current_events, brand_monitoring, multi_perspective_decomposition, long_context_synthesis. Upgrades simultâneos: Claude Opus 4.6→4.7, Groq default Llama 3.3 70B → Llama 4 Scout 17B 16E, Groq Heavy default → openai/gpt-oss-120b. **Diversity guarantee em planos COMPLEX 5+ tasks** baseado em Mixture of Agents (Wang 2024) + DAAO (2509.11079) + AdaptOrch (2602.16873). Detalhes: [docs/research/multi-llm-orchestration-2026.md](docs/research/multi-llm-orchestration-2026.md).
 >
 > **Updated 2026-04-07** — Migrated from single-model-per-task-type (96.7% cost concentration in Opus 4) to **tier routing by complexity** (Haiku 4.5 → Sonnet 4.6 → Opus 4.7). Added Kimi K2 + Qwen 3 32B in Groq, sonar-deep-research in Perplexity, Gemini 2.5 Pro for analysis. **Projected savings: 20-40% per execution**. Full audit: [docs/AUDIT_2026-04-07.md](docs/AUDIT_2026-04-07.md).
 >
@@ -47,7 +54,7 @@ Demand --> Orchestrator (Claude decomposes) --> Router (adaptive scoring)
 | **Anthropic** | claude-opus-4-7 | premium · architecture/critical_review complexity 4-5 | $15.00 / $75.00 |
 | **Anthropic** | claude-sonnet-4-6 | balanced · default for code/review complexity 3 | $3.00 / $15.00 |
 | **Anthropic** | claude-haiku-4-5 | economy · classification/summarization complexity 1-2 | $0.80 / $4.00 |
-| **OpenAI** | gpt-4o | writing, copywriting, SEO | $2.50 / $10.00 |
+| **OpenAI** | gpt-5.5 ⭐ | **PREMIUM canonical p/ writing, copywriting, SEO** (Sprint 12) | $5.00 / $15.00 |
 | **Google** | gemini-2.5-pro | analysis, code, decomposition (Pro reservado p/ raciocínio profundo) | $1.25 / $5.00 |
 | **Google** | gemini-2.5-flash | analysis medium, classification, data_processing (5x mais barato que Pro) | $0.30 / $2.50 |
 | **Perplexity** | sonar-deep-research | research profunda com 5-40 citações verificáveis | $2.00 / $8.00 |
@@ -89,20 +96,31 @@ After 5+ tasks executed in a session, if any provider exceeds its `CAP_*_SHARE` 
 
 ## 12 Task Types
 
-| Type | Primary LLM | Fallback |
-|---|---|---|
-| `research` | Perplexity | Gemini |
-| `analysis` | Gemini | Claude |
-| `writing` | GPT-4o | Claude |
-| `copywriting` | GPT-4o | Claude |
-| `code` | Claude | GPT-4o |
-| `review` | Claude | GPT-4o |
-| `seo` | GPT-4o | Perplexity |
-| `data_processing` | Gemini | GPT-4o |
-| `fact_check` | Perplexity | Gemini |
-| `classification` | Groq | Gemini |
-| `translation` | GPT-4o | Gemini |
-| `summarization` | Gemini | GPT-4o |
+**Sprint 12 (2026-05-17) — diretriz canônica COPY PREMIUM ONLY + Perplexity prioridade.** Os 4 primeiros slots de `writing/copywriting/seo` são todos premium-tier (gpt-5.5, claude-opus-4-7, gemini-2.5-pro, perplexity); Sonnet/Haiku/Flash só como último recurso. Research tem Perplexity como prioridade absoluta com Gemini Pro + Opus 4.7 como fallback.
+
+| Type | Primary LLM | Fallback | Premium chain |
+|---|---|---|---|
+| `research` | **Perplexity** (sonar-deep-research) | Gemini Pro | perplexity → gemini → claude → gpt-5.5 |
+| `fact_check` | **Perplexity** (sonar-deep-research) | Gemini Pro | perplexity → gemini → claude → gpt-5.5 |
+| `writing` ⭐ | **gpt-5.5** | Claude Opus 4.7 | gpt-5.5 → claude → gemini → perplexity |
+| `copywriting` ⭐ | **gpt-5.5** | Claude Opus 4.7 | gpt-5.5 → claude → gemini → perplexity |
+| `seo` ⭐ | **gpt-5.5** | Claude Opus 4.7 | gpt-5.5 → claude → gemini → perplexity |
+| `analysis` | Gemini Flash | Groq Heavy | — |
+| `code` | Gemini Pro | Claude Sonnet | — |
+| `review` | Groq Heavy | Gemini Flash | — |
+| `architecture` | Claude Opus 4.7 | Gemini Pro | — |
+| `critical_review` | Claude Opus 4.7 | Gemini Pro | — |
+| `decomposition` | Claude Sonnet | Gemini Pro | — |
+| `code_review` | Groq Heavy | Claude Sonnet | — |
+| `data_processing` | Gemini Flash | Groq | — |
+| `classification` | Groq (Llama 4 Scout) | Gemini Flash | — |
+| `translation` | Groq | gpt-5.5 | — |
+| `summarization` | Groq | Gemini Flash | — |
+| `realtime_search` | xAI Grok 4.3 | Perplexity | — |
+| `social_listening` | xAI Grok 4.3 | Perplexity | — |
+| `multi_perspective_decomposition` | xAI Grok Multi-Agent | Claude Sonnet | — |
+
+⭐ = task type sujeito à diretriz **COPY PREMIUM ONLY** (Sprint 12).
 
 ---
 
