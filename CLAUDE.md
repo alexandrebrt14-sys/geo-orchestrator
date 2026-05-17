@@ -1,5 +1,44 @@
 # CLAUDE.md — geo-orchestrator
 
+## 2026-05-17 — Taxonomia canônica · 50 conceitos GEO/SEO 2026 como dicionário de classificação
+
+Documento canônico Brasil GEO incorporado ao orchestrator: **`docs/GEO_50_CONCEITOS_CANONICAL.md`**.
+
+Os 50 conceitos (14 eixos, de Crawlabilidade a Prioridade de ação) são a taxonomia oficial para:
+
+1. **Classificar demandas** recebidas via `cli.py run "<demanda>"` ou `board "<demanda>"`. O `smart_router._classify_task` deve usar termos do documento como gatilho de roteamento.
+2. **Escolher fallback chain** apropriada a partir do task_type derivado.
+3. **Auditar entregas** via `QualityJudge` — validar se o output cobre os conceitos relevantes ao task_type, sem violar anti-padrões (pseudo-GEO, schema inflado, pseudo-autoridade).
+
+### Mapeamento conceitos → task_type → chain canônica
+
+| Conceitos | task_type | Fallback chain (de `src/config.py`) |
+|---|---|---|
+| 1, 2, 13, 14, 28, 29 | `technical_audit` (rota `code_review`/`analysis`) | Claude Opus 4.7 → Gemini 2.5 Pro → gpt-5.5 → claude_sonnet |
+| 8, 11, 12, 24, 25 | `content_premium` (rota `writing`/`copywriting`/`seo`) | **COPY PREMIUM ONLY** — gpt-5.5 → Opus 4.7 → Gemini Pro (sem Sonnet/Haiku/Flash) |
+| 21, 22, 23, 47, 48 | `authority_eeat` (mix `research` + `critical_review`) | Opus 4.7 + Perplexity sonar-deep-research em paralelo |
+| 26 | `risk_review` (gate antes do output) | Opus 4.7 — flagging de pseudo-GEO em copy gerada |
+
+### Gatilhos automáticos sugeridos (`smart_router`)
+
+- Termos como "answer capsule", "citabilidade GEO", "recuperabilidade generativa", "citação por LLM" (Conceitos 11, 24, 25) → forçar **Perplexity sonar-deep-research** no slot 1 da chain `research` (alinhado com Sprint 12, cap 0.50).
+- Termos como "crawlabilidade", "indexabilidade", "robots.txt", "sitemap.xml", "schema.org" (Conceitos 1, 2, 13, 14, 28, 29) → rotear para `code_review`/`analysis` com Opus 4.7 + Gemini Pro.
+- Termos como "garante citação", "AI Overview garantido", "schema garante", "llms.txt faz ChatGPT citar" (Conceito 26) → `risk_review` BLOQUEIA output até que termos sejam removidos. Pseudo-GEO é anti-padrão proibido por regra Brasil GEO.
+
+### Auditoria via Quality Judge
+
+Antes de aprovar entrega, o `QualityJudge` valida:
+
+1. Cobertura de conceitos relevantes ao task_type.
+2. Ausência de pseudo-GEO (Conceito 26).
+3. Coerência schema vs visível (Conceito 14).
+4. Slugs ASCII (anti-padrão 4).
+5. Pseudo-autoridade ausente — sem "#1"/"líder"/"especialista" sem evidência.
+
+Detalhes completos, lista dos 50 conceitos, tabela síntese por uso, referências canônicas (Aggarwal SIGIR 2023, AutoGEO ICLR 2026, Profound, Ahrefs Brand Radar, Google AI Optim Guide 15-mai-2026) e os 5 anti-padrões proibidos: ver `docs/GEO_50_CONCEITOS_CANONICAL.md`.
+
+---
+
 ## 2026-05-17 — Sprint 12 · DIRETRIZ COPY PREMIUM ONLY + PERPLEXITY PRIORIDADE
 
 Diretriz canônica direta do CEO da Brasil GEO. Quatro mudanças conectadas:
