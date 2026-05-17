@@ -36,6 +36,9 @@ PROVIDER_LIMITS: dict[Provider, ProviderLimit] = {
     Provider.GOOGLE: ProviderLimit(requests_per_minute=30, burst_size=3),  # Billing ativo (R$500 credito)
     Provider.PERPLEXITY: ProviderLimit(requests_per_minute=20, burst_size=2),
     Provider.GROQ: ProviderLimit(requests_per_minute=300, burst_size=10),   # Free tier: 500K RPM, 300K tokens/min — ampliado 2026-03-28
+    # 2026-05-17 — xAI Grok (com K) adicionada. xAI default tier: 1800 RPM
+    # e 10M TPM (muito generoso). Burst 10 deixa folga para batches paralelos.
+    Provider.XAI: ProviderLimit(requests_per_minute=1800, burst_size=10),
 }
 
 

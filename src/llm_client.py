@@ -300,6 +300,8 @@ class LLMClient:
             response = await self._call_perplexity(prompt, system, max_tokens)
         elif provider == Provider.GROQ:
             response = await self._call_groq(prompt, system, max_tokens)
+        elif provider == Provider.XAI:
+            response = await self._call_xai(prompt, system, max_tokens)
         else:
             raise ValueError(f"Provedor desconhecido: {provider}")
 
@@ -580,6 +582,61 @@ class LLMClient:
 
         pool = ConnectionPool.get_instance()
         client = await pool.get_client(Provider.GROQ, timeout=self._timeout)
+        resp = await client.post(url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
+
+        text = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        tokens_in = usage.get("prompt_tokens", 0)
+        tokens_out = usage.get("completion_tokens", 0)
+        cost = (
+            tokens_in / 1000 * self.config.cost_per_1k_input
+            + tokens_out / 1000 * self.config.cost_per_1k_output
+        )
+
+        return LLMResponse(
+            text=text,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            cost=cost,
+            model=self.config.model,
+            provider=self.config.provider.value,
+        )
+
+    # ------------------------------------------------------------------
+    # xAI Grok (4.3 / 4.20-* — OpenAI-compatible)
+    # 2026-05-17 — 6o provider. Diferenca chave vs Groq (com Q):
+    # xAI tem modelos proprios (grok-4.3) com busca live em X via
+    # search_parameters; Groq Inc serve open-source (Llama 3.3) ultra-rapido.
+    # ------------------------------------------------------------------
+
+    async def _call_xai(
+        self, prompt: str, system: str, max_tokens: int
+    ) -> LLMResponse:
+        url = "https://api.x.ai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key or ''}",
+            "Content-Type": "application/json",
+        }
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        body: dict = {
+            "model": self.config.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        # Diferencial xAI: search_parameters habilita busca live em X/Twitter
+        # quando o LLMConfig pede capability realtime_search/live_x_data.
+        # Default off para evitar quota oculta; ativar via env por LLMConfig.
+        if any(s in self.config.strengths for s in ("realtime_search", "live_x_data", "live_search_quick")):
+            body["search_parameters"] = {"mode": "auto"}
+
+        pool = ConnectionPool.get_instance()
+        client = await pool.get_client(Provider.XAI, timeout=self._timeout)
         resp = await client.post(url, headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()

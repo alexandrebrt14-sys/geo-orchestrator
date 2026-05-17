@@ -21,6 +21,12 @@ class Provider(str, Enum):
     GOOGLE = "google"
     PERPLEXITY = "perplexity"
     GROQ = "groq"
+    # 2026-05-17 — 6o provider canonico. xAI Grok (com K) e diferente de
+    # Groq Inc (com Q, ja em uso acima). xAI tem modelos proprios (grok-4.3,
+    # grok-4.20-*) com diferencial unico de busca live em X/Twitter via
+    # search_parameters. API OpenAI-compatible em https://api.x.ai/v1.
+    # Conta canonica: alexandre.brt14@gmail.com (team caramaschigeo).
+    XAI = "xai"
 
 
 @dataclass(frozen=True)
@@ -190,6 +196,45 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         max_tokens=64000,
         role="Haiku 4.5 — tier mais barato da familia Claude. ~19x mais barato que Opus, ideal para low-complexity (triagem, classificacao, summarization).",
     ),
+    # 2026-05-17 — Familia xAI Grok adicionada como 6o provider canonico.
+    # Conta: alexandre.brt14@gmail.com / team caramaschigeo (xAI Console).
+    # API OpenAI-compatible em https://api.x.ai/v1. Pricing flat $1.25/$2.50
+    # por 1M tokens em toda linha GA (4.3 e 4.20-*). Diferenciacao por
+    # capability/context, nao por preco. Diferencial unico: search_parameters
+    # com busca live em X/Twitter (nenhum outro provider tem).
+    "grok": LLMConfig(
+        name="grok",
+        provider=Provider.XAI,
+        model=os.environ.get("XAI_MODEL", "grok-4.3"),
+        api_key_env="XAI_API_KEY",
+        strengths=["realtime_search", "live_x_data", "reasoning", "long_context_1m", "structured_outputs"],
+        cost_per_1k_input=0.00125,
+        cost_per_1k_output=0.00250,
+        max_tokens=131072,  # ctx 1M; max output mantem em 131K para nao estourar finops
+        role="Grok 4.3 — flagship xAI com busca live em X/Twitter (search_parameters), 1M context, reasoning + vision + function calling. Canal exclusivo para realtime_search, social_listening, brand_monitoring e current_events. Tom edgy por padrao — exigir prompt explicito de tom neutro quando preciso.",
+    ),
+    "grok_multi": LLMConfig(
+        name="grok_multi",
+        provider=Provider.XAI,
+        model=os.environ.get("XAI_MULTI_MODEL", "grok-4.20-multi-agent-0309"),
+        api_key_env="XAI_API_KEY",
+        strengths=["multi_agent_decomposition", "long_context_2m", "deep_reasoning", "cross_check"],
+        cost_per_1k_input=0.00125,
+        cost_per_1k_output=0.00250,
+        max_tokens=131072,
+        role="Grok Multi-Agent — 4 agentes paralelos (Grok+Harper+Benjamin+Lucas) com 2M context. Para multi_perspective_decomposition, long_context_synthesis e cross-check de research. Substitui o slot 'grok_heavy' do brief original (nao confundir com 'groq_heavy' da Groq Inc).",
+    ),
+    "grok_fast": LLMConfig(
+        name="grok_fast",
+        provider=Provider.XAI,
+        model=os.environ.get("XAI_FAST_MODEL", "grok-4.20-0309-non-reasoning"),
+        api_key_env="XAI_API_KEY",
+        strengths=["fast_inference", "classification", "extraction", "live_search_quick"],
+        cost_per_1k_input=0.00125,
+        cost_per_1k_output=0.00250,
+        max_tokens=131072,
+        role="Grok 4.20 non-reasoning — variante rapida sem CoT interno. Para classificacao, extracao e respostas curtas onde reasoning explicito nao agrega. NAO substitui Groq (com Q) para bulk: Groq Llama 3.3 70B mantem vantagem ~10x em throughput LPU.",
+    ),
 }
 
 # Sprint 7 (2026-04-08): tenta substituir LLM_CONFIGS pelo catalog runtime.
@@ -257,6 +302,22 @@ TASK_TYPES: dict[str, TaskRouting] = {
     "translation":      TaskRouting(primary="groq",          fallback="gpt4o"),
     "summarization":    TaskRouting(primary="groq",          fallback="gemini_flash"),
     "extraction":       TaskRouting(primary="groq_heavy",    fallback="gemini_flash"),
+    # ===========================================================
+    # 2026-05-17 — NOVOS TASK TYPES exclusivos da familia xAI Grok
+    # ===========================================================
+    # Grok tem o unico canal de busca live em X/Twitter (search_parameters);
+    # Perplexity faz live web mas nao alcanca timeline X em tempo real.
+    "realtime_search":  TaskRouting(primary="grok",          fallback="perplexity"),
+    "social_listening": TaskRouting(primary="grok",          fallback="perplexity"),
+    "current_events":   TaskRouting(primary="grok",          fallback="perplexity"),
+    "brand_monitoring": TaskRouting(primary="grok",          fallback="perplexity"),
+    # 2026-05-17 — Multi-agent decomposition usa Grok multi-agent nativo
+    # (4 agentes paralelos no mesmo call) em vez de decomposition via Claude.
+    "multi_perspective_decomposition": TaskRouting(primary="grok_multi", fallback="claude_sonnet"),
+    # 2026-05-17 — Long context synthesis (>500K tokens) — Grok multi-agent
+    # (2M ctx) vs Gemini 2.5 Pro (2M ctx). Grok ganha quando precisa
+    # cross-check com timeline social; Gemini ganha em texto puro.
+    "long_context_synthesis": TaskRouting(primary="grok_multi", fallback="gemini"),
 }
 
 
@@ -302,6 +363,15 @@ FALLBACK_CHAINS: dict[str, list[str]] = {
     "translation":      ["groq",          "gpt4o",         "gemini_flash",  "claude_haiku",  "groq_heavy",   "perplexity"],
     "summarization":    ["groq",          "gemini_flash",  "claude_haiku",  "groq_heavy",    "gpt4o",        "perplexity"],
     "extraction":       ["groq_heavy",    "gemini_flash",  "claude_sonnet", "gpt4o",         "groq",         "claude_haiku"],
+    # 2026-05-17 — fallback chains para os 5 task types novos da familia xAI.
+    # Mantem cross-provider diversity: 1o slot xAI, 2o slot Perplexity (live web),
+    # demais slots em providers diferentes para graceful degradation total.
+    "realtime_search":  ["grok",          "perplexity",    "gemini_flash",  "gpt4o",         "claude_sonnet", "groq"],
+    "social_listening": ["grok",          "perplexity",    "gpt4o",         "gemini_flash",  "claude_sonnet", "groq"],
+    "current_events":   ["grok",          "perplexity",    "gemini_flash",  "gpt4o",         "claude_sonnet", "groq"],
+    "brand_monitoring": ["grok",          "perplexity",    "gpt4o",         "gemini_flash",  "claude_sonnet", "groq"],
+    "multi_perspective_decomposition": ["grok_multi", "claude_sonnet", "gemini",   "gpt4o",         "groq_heavy",   "groq"],
+    "long_context_synthesis":          ["grok_multi", "gemini",        "claude",   "gpt4o",         "groq_heavy",   "perplexity"],
 }
 
 
@@ -332,6 +402,13 @@ TIMEOUT_BY_TASK_TYPE: dict[str, float] = {
     "data_processing": 90.0,
     "fact_check":     180.0,   # fact_check tambem usa sonar/perplexity
     "translation":     90.0,
+    # 2026-05-17 — timeouts para task types xAI Grok.
+    "realtime_search":  120.0,  # Grok com search_parameters: auto pode levar ~30-90s
+    "social_listening": 120.0,
+    "current_events":   120.0,
+    "brand_monitoring": 120.0,
+    "multi_perspective_decomposition": 240.0,  # multi-agent 4-paralelo demora
+    "long_context_synthesis":          300.0,  # 2M ctx + multi-agent
 }
 
 # Default timeout for unknown task types
@@ -388,6 +465,13 @@ AVG_COST_PER_CALL: dict[str, float] = {
     "perplexity":    0.05,
     "groq":          0.001,
     "groq_heavy":    0.0025,
+    # 2026-05-17 — xAI Grok adicionada. Pricing flat $1.25/$2.50 por 1M tokens.
+    # Estimativa conservadora ~$0.008/call para grok 4.3 em uso tipico
+    # (5k tokens in + 1k out). grok_multi pode ir a $0.015 com 2M ctx;
+    # grok_fast em $0.005 para classificacao/extracao curta.
+    "grok":          0.008,
+    "grok_multi":    0.015,
+    "grok_fast":     0.005,
 }
 
 
@@ -408,6 +492,10 @@ FINOPS_DAILY_LIMITS: dict[str, float] = {
     "google":     float(os.environ.get("FINOPS_LIMIT_GOOGLE", "50.00")),
     "perplexity": float(os.environ.get("FINOPS_LIMIT_PERPLEXITY", "30.00")),
     "groq":       float(os.environ.get("FINOPS_LIMIT_GROQ", "30.00")),
+    # 2026-05-17 — xAI Grok com cap conservador. Conta iniciada com USD 25
+    # de credito (alexandre.brt14@gmail.com / team caramaschigeo). Cap diario
+    # $15 deixa 40h+ de operacao continua antes de esgotar credito inicial.
+    "xai":        float(os.environ.get("FINOPS_LIMIT_XAI", "15.00")),
 }
 
 # Global daily budget (sum of all providers, with safety margin).
@@ -439,6 +527,10 @@ PROVIDER_SHARE_CAP: dict[str, float] = {
     # de research em sub-tasks ou downgrade para sonar-pro em queries simples.
     "perplexity": float(os.environ.get("CAP_PERPLEXITY", "0.35")),
     "groq":       float(os.environ.get("CAP_GROQ", "0.65")),
+    # 2026-05-17 — xAI Grok com cap moderado inicial. Cuidado: pricing flat
+    # $1.25/$2.50 nao tem tier "barato"; sem cap, demanda multi-task pode
+    # estourar credito rapido. Conservador ate ter baseline real de uso.
+    "xai":        float(os.environ.get("CAP_XAI", "0.30")),
 }
 
 # Mapa LLM-name -> provider (resolvido a partir de LLM_CONFIGS).

@@ -119,6 +119,53 @@ providers:
         tier: economy
         config_alias: groq
         status: active
+
+  # 2026-05-17 — 6o provider canonico: xAI Grok (com K).
+  # NAO confundir com Groq Inc (com Q) acima. xAI tem modelos proprios
+  # (grok-4.3, grok-4.20-*) com diferencial unico de busca live em X/Twitter.
+  # Conta canonica: alexandre.brt14@gmail.com / team caramaschigeo
+  # Console: https://console.x.ai/team/038ac15a-6901-4d20-b15e-264ccdd5c563
+  # API base URL: https://api.x.ai/v1 (OpenAI-compatible)
+  # Pricing flat $1.25/$2.50 por 1M tokens em toda linha GA 4.3 + 4.20-*.
+  # Linha pre-15-mai-2026 (grok-4-1-fast, grok-4-fast, grok-code-fast-1)
+  # foi DEPRECATED em 15-mai-2026 — nao usar.
+  xai:
+    display_name: "xAI Grok"
+    api_key_env: XAI_API_KEY
+    models:
+      grok-4.3:
+        display: "Grok 4.3"
+        input_cost_per_mtok: 1.25
+        output_cost_per_mtok: 2.50
+        max_tokens: 131072
+        rpm: 1800
+        capabilities: [realtime_search, live_x_data, reasoning, vision, function_calling, structured_outputs]
+        tier: standard
+        config_alias: grok
+        status: active
+        notes: "Flagship general-purpose. 1M context. Lancado 30-abr-2026. Tom edgy por padrao — exigir prompt explicito de tom neutro. Search_parameters ativa busca live em X/Twitter (cuidado: consome quota oculta)."
+      grok-4.20-multi-agent-0309:
+        display: "Grok 4.20 Multi-Agent"
+        input_cost_per_mtok: 1.25
+        output_cost_per_mtok: 2.50
+        max_tokens: 131072
+        rpm: 1800
+        capabilities: [multi_agent_decomposition, long_context_2m, deep_reasoning, cross_check]
+        tier: premium
+        config_alias: grok_multi
+        status: active
+        notes: "4 agentes paralelos (Grok+Harper+Benjamin+Lucas) no mesmo call. 2M context. Para multi_perspective_decomposition e long_context_synthesis. Substitui o slot 'grok_heavy' do brief original (nao confundir com 'groq_heavy' da Groq Inc)."
+      grok-4.20-0309-non-reasoning:
+        display: "Grok 4.20 Fast (non-reasoning)"
+        input_cost_per_mtok: 1.25
+        output_cost_per_mtok: 2.50
+        max_tokens: 131072
+        rpm: 1800
+        capabilities: [fast_inference, classification, extraction, live_search_quick]
+        tier: economy
+        config_alias: grok_fast
+        status: active
+        notes: "Variante rapida sem CoT interno. NAO substitui Groq (com Q) para bulk: Llama 3.3 70B em LPU mantem vantagem ~10x em throughput. Pricing nao tem desconto — recomendado apenas quando precisa de live X data + velocidade."
       # 2026-05-02 — alias groq_heavy NAO esta no catalog YAML por design.
       # O modelo real e controlado via env GROQ_HEAVY_MODEL e o LLMConfig
       # vem do dict hardcoded em src/config.py (caminho de fallback). Isso

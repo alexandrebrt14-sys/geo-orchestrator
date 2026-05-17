@@ -1,4 +1,9 @@
-"""Smoke test: chama cada um dos 5 LLMs com prompt curto e mede tempo+custo."""
+"""Smoke test: chama cada um dos 6 LLMs com prompt curto e mede tempo+custo.
+
+2026-05-17 — Wave 5 da integracao xAI Grok. test_xai adicionado como 6o
+provider canonico. Diferenciacao: Grok (com K, xAI proprio) vs Groq (com Q,
+chips LPU). Conta xAI: alexandre.brt14@gmail.com / team caramaschigeo.
+"""
 import os, time, json, asyncio, httpx
 from pathlib import Path
 from dotenv import load_dotenv
@@ -91,9 +96,31 @@ async def test_groq():
     cost = inp/1e6*0.59 + out/1e6*0.79
     return ("Groq llama-3.3-70b", "OK", dt, 200, j["choices"][0]["message"]["content"][:50], cost)
 
+async def test_xai():
+    """xAI Grok (com K) — 6o provider canonico desde 2026-05-17.
+    API OpenAI-compatible em https://api.x.ai/v1. Conta canonica:
+    alexandre.brt14@gmail.com / team caramaschigeo."""
+    t0 = time.time()
+    key = os.environ.get("XAI_API_KEY", "")
+    if not key:
+        return ("xAI grok-4.3", "SKIP", 0.0, 0, "XAI_API_KEY ausente — criar em console.x.ai", 0)
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post("https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": "grok-4.3", "max_tokens": 10,
+                  "messages": [{"role": "user", "content": PROMPT}]})
+    dt = time.time() - t0
+    if r.status_code != 200:
+        return ("xAI grok-4.3", "FAIL", dt, r.status_code, r.text[:200], 0)
+    j = r.json()
+    u = j.get("usage", {})
+    inp, out = u.get("prompt_tokens", 0), u.get("completion_tokens", 0)
+    cost = inp/1e6*1.25 + out/1e6*2.50  # pricing flat xAI 4.3
+    return ("xAI grok-4.3", "OK", dt, 200, j["choices"][0]["message"]["content"][:50], cost)
+
 async def main():
     results = await asyncio.gather(
-        test_anthropic(), test_openai(), test_google(), test_perplexity(), test_groq(),
+        test_anthropic(), test_openai(), test_google(), test_perplexity(), test_groq(), test_xai(),
         return_exceptions=True
     )
     print(f"\n{'Provider':<28} {'Status':<6} {'Latencia':<10} {'HTTP':<6} {'Custo USD':<12} Resposta")
