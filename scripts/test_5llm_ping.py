@@ -29,19 +29,21 @@ async def test_anthropic():
     return ("Anthropic claude-opus-4.7", "OK", dt, 200, j["content"][0]["text"][:50], cost)
 
 async def test_openai():
+    """OpenAI gpt-5.5 (upgrade canonico 2026-05-17). API gpt-5+ exige
+    max_completion_tokens em vez de max_tokens. Pricing $0.005/$0.015 per 1k."""
     t0 = time.time()
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post("https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}", "Content-Type": "application/json"},
-            json={"model": "gpt-4o", "max_tokens": 10,
+            json={"model": "gpt-5.5", "max_completion_tokens": 30,
                   "messages": [{"role": "user", "content": PROMPT}]})
     dt = time.time() - t0
     if r.status_code != 200:
-        return ("OpenAI gpt-4o", "FAIL", dt, r.status_code, r.text[:200], 0)
+        return ("OpenAI gpt-5.5", "FAIL", dt, r.status_code, r.text[:200], 0)
     j = r.json()
     inp, out = j["usage"]["prompt_tokens"], j["usage"]["completion_tokens"]
-    cost = inp/1e6*2.5 + out/1e6*10  # gpt-4o: $2.5/$10
-    return ("OpenAI gpt-4o", "OK", dt, 200, j["choices"][0]["message"]["content"][:50], cost)
+    cost = inp/1e6*5 + out/1e6*15  # gpt-5.5: $5/$15
+    return ("OpenAI gpt-5.5", "OK", dt, 200, j["choices"][0]["message"]["content"][:50], cost)
 
 async def test_google():
     t0 = time.time()

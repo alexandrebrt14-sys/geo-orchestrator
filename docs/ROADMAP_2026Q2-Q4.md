@@ -4,6 +4,18 @@
 > Próxima revisão CTO: **2026-08-01**.
 > Owner: **Alexandre Caramaschi**.
 
+## 2026-05-17 (tarde) — Upgrade OpenAI gpt-4o → gpt-5.5
+
+Marco de upgrade pontual disparado por ordem direta do CEO Brasil GEO:
+
+- **`LLM_CONFIGS["gpt4o"].model`** atualizado de `gpt-4o` (lançado ago/2024) para **`gpt-5.5`** (lançado 23/04/2026 pela OpenAI), via `os.environ.get("OPENAI_MODEL", "gpt-5.5")`. Alias `"gpt4o"` mantido por compat reversa com routers.
+- **Pricing** atualizado: `cost_per_1k_input` 0,0025 → **0,005** · `cost_per_1k_output` 0,010 → **0,015**.
+- **Context window** ampliado de 16k para **32k tokens** (gpt-5.5 suporta 1M nativos, conservador em 32k para FinOps).
+- **API compatibility fix**: `src/llm_client.py:_call_openai` detecta automaticamente modelos `gpt-5*` / `o1` / `o3` / `o4` e usa `max_completion_tokens` em vez de `max_tokens` (mudança breaking que o legacy `gpt-4*` não exige).
+- **Validação**: `geo-bridge.sh ping` retorna **6/6 OK** com gpt-5.5 respondendo em 3,37s a custo real de US$ 0,000300 por health check.
+- **Modelos premium ainda mais novos disponíveis** na conta: `gpt-5.5-pro-2026-04-23` (não compatível com `/v1/chat/completions`, requer `/v1/responses`), `gpt-5.1-codex-max`, `gpt-5.3-codex`. Avaliação para `groq_heavy` / tier premium em sprint futura.
+- **`scripts/test_5llm_ping.py`** atualizado: chama `gpt-5.5` com `max_completion_tokens` e label "OpenAI gpt-5.5".
+
 ## 2026-05-17 — Wave xAI Grok (6º provider) + upgrade modelos canônicos
 
 Marco de plataforma — orquestrador agora roda **6 LLM providers** (era 5):

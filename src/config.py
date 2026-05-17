@@ -86,15 +86,21 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         role="Arquiteto e revisor principal. Raciocinio complexo, codigo critico e decomposicao de demandas.",
     ),
     "gpt4o": LLMConfig(
+        # 2026-05-17 v4 — upgrade canonico para gpt-5.5 (lancado 23/04/2026,
+        # versao mais avancada estavel). Mantemos a chave "gpt4o" por
+        # compatibilidade reversa com routers, mas o model id e atualizado.
+        # gpt-4o (2024-08) ficou 9 meses defasado; gpt-5.5 traz: contexto
+        # 1M tokens nativo, reasoning interno otimizado para copywriting longo,
+        # e melhor adequacao a pt-BR. Pricing oficial (OpenAI 23/04/2026).
         name="gpt4o",
         provider=Provider.OPENAI,
-        model="gpt-4o",
+        model=os.environ.get("OPENAI_MODEL", "gpt-5.5"),
         api_key_env="OPENAI_API_KEY",
-        strengths=["long_form_writing", "copywriting", "seo_content", "creative_text", "translation"],
-        cost_per_1k_input=0.0025,
-        cost_per_1k_output=0.010,
-        max_tokens=16384,
-        role="Redator e copywriter. Conteudo longo, SEO, traducao e texto criativo.",
+        strengths=["long_form_writing", "copywriting", "seo_content", "creative_text", "translation", "reasoning"],
+        cost_per_1k_input=0.005,
+        cost_per_1k_output=0.015,
+        max_tokens=32768,
+        role="Redator e copywriter. Conteudo longo, SEO, traducao e texto criativo. Reasoning nativo a partir de gpt-5.5.",
     ),
     "gemini": LLMConfig(
         name="gemini",

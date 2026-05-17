@@ -404,7 +404,9 @@ class LLMClient:
         )
 
     # ------------------------------------------------------------------
-    # OpenAI (GPT-4o)
+    # OpenAI (GPT-5.5+ / GPT-4o)
+    # 2026-05-17: gpt-5+ models requerem max_completion_tokens em vez de
+    # max_tokens. Detectamos pelo prefix do model id e ajustamos o body.
     # ------------------------------------------------------------------
 
     async def _call_openai(
@@ -420,9 +422,20 @@ class LLMClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        body = {
+        # gpt-5 family + o1/o3/o4 series usam max_completion_tokens.
+        # gpt-4* legacy mantem max_tokens.
+        model_id = self.config.model.lower()
+        uses_completion_tokens = (
+            model_id.startswith("gpt-5") or
+            model_id.startswith("o1") or
+            model_id.startswith("o3") or
+            model_id.startswith("o4")
+        )
+        token_key = "max_completion_tokens" if uses_completion_tokens else "max_tokens"
+
+        body: dict = {
             "model": self.config.model,
-            "max_tokens": max_tokens,
+            token_key: max_tokens,
             "messages": messages,
         }
 
