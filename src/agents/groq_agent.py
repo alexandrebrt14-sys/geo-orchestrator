@@ -59,7 +59,7 @@ class GroqAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Any,
-        model_name: str = "llama-3.3-70b-versatile",
+        model_name: str = "meta-llama/llama-4-scout-17b-16e-instruct",
         cost_per_1k_input: float = 0.00059,
         cost_per_1k_output: float = 0.00079,
     ):

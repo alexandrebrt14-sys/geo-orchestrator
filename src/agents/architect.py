@@ -70,7 +70,7 @@ class ArchitectAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Any,
-        model_name: str = "claude-opus-4-6",
+        model_name: str = "claude-opus-4-7",
         cost_per_1k_input: float = 0.015,
         cost_per_1k_output: float = 0.075,
     ):

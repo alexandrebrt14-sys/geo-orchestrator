@@ -77,7 +77,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
     "claude": LLMConfig(
         name="claude",
         provider=Provider.ANTHROPIC,
-        model="claude-opus-4-6",
+        model="claude-opus-4-7",
         api_key_env="ANTHROPIC_API_KEY",
         strengths=["architecture", "complex_code", "critical_review", "reasoning"],
         cost_per_1k_input=0.015,
@@ -146,7 +146,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
     "groq": LLMConfig(
         name="groq",
         provider=Provider.GROQ,
-        model=os.environ.get("GROQ_DEFAULT_MODEL", "llama-3.3-70b-versatile"),
+        model=os.environ.get("GROQ_DEFAULT_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
         api_key_env="GROQ_API_KEY",
         strengths=["ultra_fast_inference", "code_review", "quick_analysis", "translation", "summarization"],
         cost_per_1k_input=0.00059,
@@ -162,7 +162,7 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
     "groq_heavy": LLMConfig(
         name="groq_heavy",
         provider=Provider.GROQ,
-        model=os.environ.get("GROQ_HEAVY_MODEL", "llama-3.3-70b-versatile"),
+        model=os.environ.get("GROQ_HEAVY_MODEL", "openai/gpt-oss-120b"),
         api_key_env="GROQ_API_KEY",
         strengths=["fast_reasoning", "code_review_heavy", "deep_classification", "structured_extraction", "decomposition"],
         cost_per_1k_input=0.00150,

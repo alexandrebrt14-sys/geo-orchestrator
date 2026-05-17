@@ -18,15 +18,15 @@ async def test_anthropic():
         r = await c.post("https://api.anthropic.com/v1/messages",
             headers={"x-api-key": os.environ["ANTHROPIC_API_KEY"],
                      "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-opus-4-6", "max_tokens": 10,
+            json={"model": "claude-opus-4-7", "max_tokens": 10,
                   "messages": [{"role": "user", "content": PROMPT}]})
     dt = time.time() - t0
     if r.status_code != 200:
-        return ("Anthropic", "FAIL", dt, r.status_code, r.text[:200], 0)
+        return ("Anthropic claude-opus-4.7", "FAIL", dt, r.status_code, r.text[:200], 0)
     j = r.json()
     inp, out = j["usage"]["input_tokens"], j["usage"]["output_tokens"]
-    cost = inp/1e6*15 + out/1e6*75  # opus-4.6: $15/$75
-    return ("Anthropic claude-opus-4.6", "OK", dt, 200, j["content"][0]["text"][:50], cost)
+    cost = inp/1e6*15 + out/1e6*75  # opus-4.7: $15/$75 (mesmo tier opus)
+    return ("Anthropic claude-opus-4.7", "OK", dt, 200, j["content"][0]["text"][:50], cost)
 
 async def test_openai():
     t0 = time.time()
@@ -85,16 +85,16 @@ async def test_groq():
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post("https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "max_tokens": 10,
+            json={"model": "meta-llama/llama-4-scout-17b-16e-instruct", "max_tokens": 10,
                   "messages": [{"role": "user", "content": PROMPT}]})
     dt = time.time() - t0
     if r.status_code != 200:
-        return ("Groq llama-3.3-70b", "FAIL", dt, r.status_code, r.text[:200], 0)
+        return ("Groq llama-4-scout-17b", "FAIL", dt, r.status_code, r.text[:200], 0)
     j = r.json()
     u = j.get("usage", {})
     inp, out = u.get("prompt_tokens", 0), u.get("completion_tokens", 0)
-    cost = inp/1e6*0.59 + out/1e6*0.79
-    return ("Groq llama-3.3-70b", "OK", dt, 200, j["choices"][0]["message"]["content"][:50], cost)
+    cost = inp/1e6*0.11 + out/1e6*0.34  # llama-4-scout Groq pricing
+    return ("Groq llama-4-scout-17b", "OK", dt, 200, j["choices"][0]["message"]["content"][:50], cost)
 
 async def test_xai():
     """xAI Grok (com K) — 6o provider canonico desde 2026-05-17.
