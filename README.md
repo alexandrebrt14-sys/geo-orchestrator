@@ -1,17 +1,19 @@
 # geo-orchestrator
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
-![LLMs](https://img.shields.io/badge/LLMs-5_providers-ff6b35)
+![LLMs](https://img.shields.io/badge/LLMs-6_providers-ff6b35)
 ![Tests](https://img.shields.io/badge/tests-140%20passed-brightgreen.svg)
 ![Coverage](https://img.shields.io/badge/coverage-53%25-yellow.svg)
 [![CI](https://github.com/alexandrebrt14-sys/geo-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/alexandrebrt14-sys/geo-orchestrator/actions/workflows/tests.yml)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
-Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude Sonnet 4.5, routes each task to the most appropriate LLM (8 models across 5 providers) based on **complexity-aware tier routing** + **80% provider concentration cap** + adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, FinOps governance and **WhatsApp/email alerts** on budget thresholds.
+Multi-LLM orchestration pipeline for Generative Engine Optimization (GEO) content production. Receives a natural-language demand, decomposes it into atomic tasks via Claude Sonnet 4.6, routes each task to the most appropriate LLM (12 models across **6 providers**) based on **complexity-aware tier routing** + **provider concentration caps** + **diversity guarantee in COMPLEX plans** + adaptive scoring, and executes waves in parallel with caching, checkpoints, quality gates, FinOps governance and **WhatsApp/email alerts** on budget thresholds.
 
-**12,500+ lines | 1,189 calls tracked | 8 models / 5 providers | unified tracking via [geo-finops](https://github.com/alexandrebrt14-sys/geo-finops)**
+**12,500+ lines | 1,189+ calls tracked | 12 models / 6 providers | unified tracking via [geo-finops](https://github.com/alexandrebrt14-sys/geo-finops)**
 
-> **Updated 2026-04-07** — Migrated from single-model-per-task-type (96.7% cost concentration in Opus 4) to **tier routing by complexity** (Haiku 4.5 → Sonnet 4.5 → Opus 4.6). Added Kimi K2 + Qwen 3 32B in Groq, sonar-deep-research in Perplexity, Gemini 2.5 Pro for analysis. **Projected savings: 20-40% per execution**. Full audit: [docs/AUDIT_2026-04-07.md](docs/AUDIT_2026-04-07.md).
+> **Updated 2026-05-17** — Adicionado **xAI Grok (com K) como 6º provider canônico**, distinto de Groq Inc (com Q, chips LPU). 3 entradas Grok (`grok` grok-4.3 / `grok_multi` grok-4.20-multi-agent / `grok_fast` grok-4.20-non-reasoning). 6 task types novos exclusivos: realtime_search, social_listening, current_events, brand_monitoring, multi_perspective_decomposition, long_context_synthesis. Upgrades simultâneos: Claude Opus 4.6→4.7, Groq default Llama 3.3 70B → Llama 4 Scout 17B 16E, Groq Heavy default → openai/gpt-oss-120b. **Diversity guarantee em planos COMPLEX 5+ tasks** baseado em Mixture of Agents (Wang 2024) + DAAO (2509.11079) + AdaptOrch (2602.16873). Detalhes: [docs/research/multi-llm-orchestration-2026.md](docs/research/multi-llm-orchestration-2026.md).
+>
+> **Updated 2026-04-07** — Migrated from single-model-per-task-type (96.7% cost concentration in Opus 4) to **tier routing by complexity** (Haiku 4.5 → Sonnet 4.6 → Opus 4.7). Added Kimi K2 + Qwen 3 32B in Groq, sonar-deep-research in Perplexity, Gemini 2.5 Pro for analysis. **Projected savings: 20-40% per execution**. Full audit: [docs/AUDIT_2026-04-07.md](docs/AUDIT_2026-04-07.md).
 >
 > **Unified FinOps tracking** — All calls (this orchestrator + papers + curso-factory + caramaschi + landing-page-geo probes) now flow into a single SQLite local database with nightly Supabase sync. Live dashboard at https://alexandrecaramaschi.com/finops. See the standalone [`geo-finops`](https://github.com/alexandrebrt14-sys/geo-finops) repository (initial release [v1.1.0](https://github.com/alexandrebrt14-sys/geo-finops/blob/main/CHANGELOG.md)).
 
@@ -38,16 +40,24 @@ Demand --> Orchestrator (Claude decomposes) --> Router (adaptive scoring)
 
 ---
 
-## 8 Models across 5 Providers (with tier routing)
+## 12 Models across 6 Providers (with tier routing + diversity guarantee)
 
 | Provider | Model | Tier / Role | Cost/1M tokens (in/out) |
 |---|---|---|---|
-| **Anthropic** | claude-opus-4-6 | premium · architecture/code complexity 4-5 | $15.00 / $75.00 |
-| **Anthropic** | claude-sonnet-4-5 | balanced · default for code/review complexity 3 | $3.00 / $15.00 |
+| **Anthropic** | claude-opus-4-7 | premium · architecture/critical_review complexity 4-5 | $15.00 / $75.00 |
+| **Anthropic** | claude-sonnet-4-6 | balanced · default for code/review complexity 3 | $3.00 / $15.00 |
 | **Anthropic** | claude-haiku-4-5 | economy · classification/summarization complexity 1-2 | $0.80 / $4.00 |
 | **OpenAI** | gpt-4o | writing, copywriting, SEO | $2.50 / $10.00 |
-| **Google** | gemini-2.5-pro | analysis, data_processing (always Pro, never Flash) | $1.25 / $5.00 |
-| **Perplexity** | sonar-pro | research padrao com fontes ao vivo | $3.00 / $15.00 |
+| **Google** | gemini-2.5-pro | analysis, code, decomposition (Pro reservado p/ raciocínio profundo) | $1.25 / $5.00 |
+| **Google** | gemini-2.5-flash | analysis medium, classification, data_processing (5x mais barato que Pro) | $0.30 / $2.50 |
+| **Perplexity** | sonar-deep-research | research profunda com 5-40 citações verificáveis | $2.00 / $8.00 |
+| **Groq Inc (com Q)** | meta-llama/llama-4-scout-17b-16e-instruct | ultra-fast LPU · classification/summarization | $0.11 / $0.34 |
+| **Groq Inc (com Q)** | openai/gpt-oss-120b (groq_heavy) | reasoning rápido em LPU · code_review, decomposition | $0.15 / $0.20 |
+| **xAI Grok (com K) ⓘ** | grok-4.3 | flagship com busca live X/Twitter + reasoning + vision (1M ctx) | $1.25 / $2.50 |
+| **xAI Grok (com K) ⓘ** | grok-4.20-multi-agent-0309 | 4 agentes paralelos nativos (Grok+Harper+Benjamin+Lucas) — 2M ctx | $1.25 / $2.50 |
+| **xAI Grok (com K) ⓘ** | grok-4.20-0309-non-reasoning | classificação rápida + live_search_quick | $1.25 / $2.50 |
+
+> ⓘ **xAI Grok (com K) ≠ Groq Inc (com Q)**. Adicionado 2026-05-17. Conta canônica `alexandre.brt14@gmail.com` / team `caramaschigeo`. API OpenAI-compatible em `https://api.x.ai/v1`. Diferencial único: `search_parameters` com busca live em X/Twitter (`realtime_search`, `social_listening`, `current_events`, `brand_monitoring`).
 | **Perplexity** | sonar-deep-research | research multi-step para complexity 4-5 (raciocinio profundo) | $2.00 / $8.00 |
 | **Groq** | llama-3.3-70b-versatile | ultra-rapida (~10x), default para Groq tier 1-2 | $0.59 / $0.79 |
 | **Groq** | moonshotai/kimi-k2-instruct | Kimi K2 1T params, raciocinio agentic, complexity 4-5 | $1.00 / $3.00 |

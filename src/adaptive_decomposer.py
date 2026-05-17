@@ -292,9 +292,56 @@ class AdaptiveDecomposer:
 
     @staticmethod
     def _infer_task_type(description: str) -> str:
-        """Infer task type from description keywords."""
+        """Infer task type from description keywords.
+
+        2026-05-17 — adicionados 6 task types xAI Grok (realtime_search,
+        social_listening, current_events, brand_monitoring,
+        multi_perspective_decomposition, long_context_synthesis).
+        Ordem importa: keywords especificas dos task types xAI antes das
+        genericas (research/analysis), para que demanda "monitorar X agora"
+        vire realtime_search em vez de research (forca uso de Grok).
+        """
         desc = description.lower()
         mapping = [
+            # ===========================================================
+            # 2026-05-17: Task types exclusivos da familia xAI Grok
+            # (testar PRIMEIRO porque sao mais especificos)
+            # ===========================================================
+            # social_listening — monitor de redes sociais em tempo real
+            ("monitor", "social_listening"),
+            ("social listening", "social_listening"),
+            ("rede social", "social_listening"),
+            ("twitter", "social_listening"),
+            ("x.com", "social_listening"),
+            ("plataforma x", "social_listening"),
+            # current_events — eventos correntes / breaking news
+            ("breaking news", "current_events"),
+            ("ultimas noticias", "current_events"),
+            ("trending", "current_events"),
+            ("viral", "current_events"),
+            # realtime_search — busca em tempo real (live web/X)
+            ("tempo real", "realtime_search"),
+            ("ao vivo", "realtime_search"),
+            ("agora mesmo", "realtime_search"),
+            ("ultimas horas", "realtime_search"),
+            # brand_monitoring — vigilancia de marca
+            ("brand monitoring", "brand_monitoring"),
+            ("brand watch", "brand_monitoring"),
+            ("mention", "brand_monitoring"),
+            ("citacao da marca", "brand_monitoring"),
+            # multi_perspective_decomposition — Grok multi-agent (4 vozes)
+            ("multiplas perspectivas", "multi_perspective_decomposition"),
+            ("varias visoes", "multi_perspective_decomposition"),
+            ("varios angulos", "multi_perspective_decomposition"),
+            ("debate", "multi_perspective_decomposition"),
+            ("contraponto", "multi_perspective_decomposition"),
+            # long_context_synthesis — Grok 2M ctx ou Gemini Pro 2M
+            ("sintese longa", "long_context_synthesis"),
+            ("documentos extensos", "long_context_synthesis"),
+            ("contexto longo", "long_context_synthesis"),
+            # ===========================================================
+            # Task types canonicos pre-existentes
+            # ===========================================================
             ("pesquis", "research"),
             ("busca", "research"),
             ("investigar", "research"),

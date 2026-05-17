@@ -149,8 +149,11 @@ LLM_CONFIGS: dict[str, LLMConfig] = {
         model=os.environ.get("GROQ_DEFAULT_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
         api_key_env="GROQ_API_KEY",
         strengths=["ultra_fast_inference", "code_review", "quick_analysis", "translation", "summarization"],
-        cost_per_1k_input=0.00059,
-        cost_per_1k_output=0.00079,
+        # 2026-05-17 — upgrade Llama 3.3 70B ($0.59/$0.79) -> Llama 4 Scout
+        # 17B 16E Instruct ($0.11/$0.34) — 5x mais barato com qualidade
+        # comparable em classification/summarization/code_review leve.
+        cost_per_1k_input=0.00011,
+        cost_per_1k_output=0.00034,
         max_tokens=32768,
         role="Velocista. Inferencia ultra-rapida (~10x mais rapido que outros). Ideal para tarefas que precisam de velocidade: triagem, classificacao, traducao, resumos rapidos, code review leve.",
     ),
@@ -340,6 +343,10 @@ MODEL_TIERS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 # 2026-04-14: cobertura 5/5 — cada chain inclui TODOS os 5 providers canonicos.
+# 2026-05-17: cobertura agora 6/6 com xAI Grok. Chains de task types novos
+# (realtime_search/social_listening/current_events/brand_monitoring/multi_*)
+# tem grok/grok_multi no 1o slot. Demais chains mantem 5 providers + grok
+# como fallback de ultimo recurso (custo similar ao Opus).
 # Garante que se 4 falharem, o 5o ainda executa (graceful degradation total).
 # 2026-05-02 v2 — REGRA DURA: os 2 primeiros slots de cada chain sao de
 # providers DIFERENTES (cross-provider diversity). Quando o primary cai,

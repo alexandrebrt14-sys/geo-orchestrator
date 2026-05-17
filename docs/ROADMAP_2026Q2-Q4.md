@@ -4,6 +4,25 @@
 > Próxima revisão CTO: **2026-08-01**.
 > Owner: **Alexandre Caramaschi**.
 
+## 2026-05-17 — Wave xAI Grok (6º provider) + upgrade modelos canônicos
+
+Marco de plataforma — orquestrador agora roda **6 LLM providers** (era 5):
+
+- **Adicionado xAI Grok (com K)** como 6º provider canônico. Conta `alexandre.brt14@gmail.com` / team `caramaschigeo`. 3 entradas LLMConfig: `grok` (grok-4.3 flagship 1M ctx) + `grok_multi` (grok-4.20-multi-agent 2M ctx, 4 agentes nativos) + `grok_fast` (non-reasoning). API OpenAI-compatible em `https://api.x.ai/v1`. Pricing flat $1,25/$2,50 por 1M tokens.
+- **6 task types novos exclusivos**: `realtime_search`, `social_listening`, `current_events`, `brand_monitoring`, `multi_perspective_decomposition`, `long_context_synthesis`. Diferencial único do Grok: `search_parameters` com busca live em X/Twitter (nenhum outro provider tem).
+- **Upgrade simultâneo de modelos canônicos**: Claude Opus 4.6 → **4.7**, Groq default Llama 3.3 70B → **Llama 4 Scout 17B 16E** (5× mais barato), Groq Heavy default → **openai/gpt-oss-120b** (120B parâmetros).
+- **Diversity guarantee em planos COMPLEX 5+ tasks** (`smart_router._ensure_provider_diversity`). Em demandas COMPLEX, garante cobertura mínima de 4 providers únicos (66%) fazendo upgrades estratégicos quando o rebalance inicial não atinge o alvo. Baseado em Mixture of Agents (Wang 2024), DAAO (2509.11079, set/2025), AdaptOrch (2602.16873, fev/2026), CASTER (2601.19793, jan/2026), When Agents Disagree (2603.20324, mar/2026).
+- **Keywords premium no demand classifier**: `realtime`, `multi_perspective`, `premium_reasoning` puxam pra COMPLEX mesmo em demandas curtas com sinais críticos (ex.: "monitorar X agora" sobe pra COMPLEX automaticamente).
+- **Adaptive decomposer atualizado**: `_infer_task_type` agora reconhece keywords PT-BR/EN dos 6 task types xAI (testadas ANTES das genéricas para que "monitorar Twitter" vire `social_listening` em vez de `research`).
+- **Validação end-to-end**: ping 6/6 OK ($0,006 por health check); `cli.py doctor` STATUS GERAL: OK; demanda real "Pesquise tendências + monitore X + analise múltiplas perspectivas + redija + revisão crítica" gerou 8 tasks usando 5/5 providers originais (Claude Opus 4.7 t7 critical_review $0,18, cobertura 100%). Próximo refinamento: adaptive decomposer marcar tasks de X/Twitter como `realtime_search` em vez de `research` para ativar Grok.
+
+**Próximos passos identificados pela literatura 2025-2026** (vide `docs/research/multi-llm-orchestration-2026.md`):
+
+1. **Topology-first routing** (AdaptOrch fev/2026): decidir parallel/sequential/hierarchical/hybrid ANTES de escolher modelo. +12-23% sobre baselines.
+2. **Difficulty-conditional depth** (DAAO set/2025): substituir complexity score único por `(difficulty ∈ [0,1], n_subtasks, needs_judge, evidence_required, realtime_data)`. +11,21% accuracy com 64% do custo.
+3. **Confidence-based cascading** (FrugalGPT/EcoAssistant): Scout/Flash primeiro, escala para Opus/Pro se confidence < threshold.
+4. **Role-aware context routing** (RCR-Router): cada subagent recebe só subset relevante da memória → -30% tokens.
+
 ## Sumário
 
 - **Categoria:** plataforma

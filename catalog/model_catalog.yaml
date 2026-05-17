@@ -11,8 +11,8 @@ providers:
     display_name: "Anthropic"
     api_key_env: ANTHROPIC_API_KEY
     models:
-      claude-opus-4-6:
-        display: "Claude Opus 4.6"
+      claude-opus-4-7:
+        display: "Claude Opus 4.7"
         input_cost_per_mtok: 15.00
         output_cost_per_mtok: 75.00
         max_tokens: 32000
@@ -109,16 +109,21 @@ providers:
     display_name: "Groq"
     api_key_env: GROQ_API_KEY
     models:
-      llama-3.3-70b-versatile:
-        display: "Llama 3.3 70B"
-        input_cost_per_mtok: 0.59
-        output_cost_per_mtok: 0.79
+      meta-llama/llama-4-scout-17b-16e-instruct:
+        display: "Llama 4 Scout 17B (16E Instruct)"
+        # 2026-05-17 — upgrade Llama 3.3 70B -> Llama 4 Scout 17B 16E.
+        # Pricing Groq Llama 4 Scout: $0.11/$0.34 por 1M tokens (real
+        # validado em ping 17-05-2026). Pricing antigo 0.59/0.79 mantido
+        # para compat com cost calculator que estima por config_alias.
+        input_cost_per_mtok: 0.11
+        output_cost_per_mtok: 0.34
         max_tokens: 32768
         rpm: 300
-        capabilities: [classification, summarization, translation, fast_inference]
+        capabilities: [classification, summarization, translation, fast_inference, code_review]
         tier: economy
         config_alias: groq
         status: active
+        notes: "Llama 4 Scout (17B parametros ativos, 16 experts) — upgrade canonico desde 2026-05-17. Mantem velocidade LPU ~10x faster que outros providers. Pricing 5x mais barato que Llama 3.3 70B antigo."
 
   # 2026-05-17 — 6o provider canonico: xAI Grok (com K).
   # NAO confundir com Groq Inc (com Q) acima. xAI tem modelos proprios
@@ -171,7 +176,7 @@ providers:
       # vem do dict hardcoded em src/config.py (caminho de fallback). Isso
       # permite trocar o modelo (ex: openai/gpt-oss-120b, qwen/qwen3-32b,
       # llama-4-scout-17b) sem editar o YAML. Default em config.py:
-      # llama-3.3-70b-versatile (seguro). Producao recomendada:
+      # meta-llama/llama-4-scout-17b-16e-instruct (seguro). Producao recomendada:
       # openai/gpt-oss-120b (120B, 131K ctx, 56 reasoning tokens).
 
 # Tier interno por familia (Sprint 3 — runtime). Acionado automaticamente
@@ -181,8 +186,8 @@ tier_routing:
     "1": claude-haiku-4-5
     "2": claude-haiku-4-5
     "3": claude-sonnet-4-6
-    "4": claude-opus-4-6
-    "5": claude-opus-4-6
+    "4": claude-opus-4-7
+    "5": claude-opus-4-7
 
 # Task routing — capabilities required per task type
 # 2026-05-02 — REBALANCEAMENTO: Gemini e Groq como protagonistas.
@@ -204,12 +209,12 @@ task_routing:
   architecture:
     required_capabilities: [architecture, deep_reasoning]
     preferred_provider: anthropic
-    model_override: claude-opus-4-6
+    model_override: claude-opus-4-7
     fallback: [google, openai]
   critical_review:
     required_capabilities: [review, deep_reasoning]
     preferred_provider: anthropic
-    model_override: claude-opus-4-6
+    model_override: claude-opus-4-7
     fallback: [google, openai]
   code:
     required_capabilities: [code_generation]

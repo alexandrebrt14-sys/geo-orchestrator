@@ -114,7 +114,8 @@ class Pipeline:
         self._results_dir.mkdir(parents=True, exist_ok=True)
 
         # Estatísticas por LLM para exibição em tempo real
-        # Inclui todos os LLMs em LLM_CONFIGS (5 canonicos + tiers internos Claude)
+        # Inclui todos os LLMs em LLM_CONFIGS (6 canonicos + tiers internos
+        # Claude + tiers Grok). 2026-05-17: passou de 5 para 6 com xAI Grok.
         self._llm_stats: dict[str, dict] = {
             name: {"assigned": 0, "completed": 0, "tokens": 0, "cost": 0.0, "status": "idle"}
             for name in LLM_CONFIGS
